@@ -1,0 +1,44 @@
+{
+  "name": "podcast-intelligence-web",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": "^20.9.0 || >=22.0.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "3.14.7",
+    "next": "16.2.12",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "^19.2.0",
+    "brace-expansion": "file:vendor/brace-expansion-cjs",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "16.2.12",
+    "jsdom": "26.1.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  },
+  "overrides": {
+    "brace-expansion": "$brace-expansion",
+    "nanoid": "3.3.18",
+    "next": {
+      "postcss": "8.5.23",
+      "sharp": "0.35.3"
+    }
+  }
+}

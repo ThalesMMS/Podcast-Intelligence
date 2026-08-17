@@ -1,0 +1,39 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+backend/.venv/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+frontend/.next/
+frontend/next-env.d.ts
+frontend/out/
+frontend/.turbo/
+frontend/tsconfig.tsbuildinfo
+npm-debug.log*
+
+# Runtime artifacts
+.local-data/
+*.wav
+*.mp3
+*.m4a
+*.ogg
+*.flac
+*.mp4
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/

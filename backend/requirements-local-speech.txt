@@ -1,0 +1,4 @@
+# Optional GPU/local speech stack. Install separately because PyTorch wheels are
+# platform-specific and intentionally excluded from the reproducible core lock.
+pyannote.audio>=3.3,<4
+torch>=2.5,<3

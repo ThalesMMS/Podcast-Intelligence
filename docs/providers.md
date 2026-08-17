@@ -1,0 +1,80 @@
+# AI providers
+
+## Demo profile
+
+The `demo` profile uses no external key. It provides:
+
+- explicitly marked synthetic transcription that is not derived from real speech;
+- deterministic feature-hashing embeddings;
+- extractive summaries and answers;
+- complete pipeline execution for development and architecture review.
+
+Do not use demo transcription for decisions or acoustic-quality evaluation.
+
+## OpenAI profile
+
+`AI_PROFILE=openai` selects:
+
+- `gpt-4o-transcribe-diarize` by default for speaker-attributed segments;
+- `text-embedding-3-small` with dimension 1536;
+- the Responses API with Structured Outputs for summaries and answers.
+
+By default, all three clients use `OPENAI_API_KEY`. Gateways with separate
+credentials can set `OPENAI_TRANSCRIPTION_API_KEY`,
+`OPENAI_EMBEDDING_API_KEY`, and `OPENAI_LLM_API_KEY`; a specific key takes
+precedence over the shared key. `OPENAI_BASE_URL` is common to all three.
+
+Use `OPENAI_LLM_API=chat_completions` when the gateway implements Structured
+Outputs in that API but not in Responses. For embeddings without support for
+the `dimensions` parameter, set `OPENAI_EMBEDDING_SEND_DIMENSIONS=false` and
+configure `EMBEDDING_DIMENSION` with the native dimension. The database accepts
+dimensions by model, and vector search filters by the active model; vectors
+above the HNSW indexing limit use exact search.
+
+The adapter validates outputs with Pydantic models and restricts cited IDs to
+the supplied segments. Audio above the configured limit is converted to MP3,
+split into parts with global offsets, and can reuse up to four voice samples
+between parts. The application must still run its own WER, DER, retrieval, and
+faithfulness evaluations.
+
+## PCM WebSocket STT
+
+`TRANSCRIPTION_PROVIDER=streaming_ws` connects to a service that receives an
+initial JSON message, mono 16-bit PCM frames at 16 kHz, and a final `stop`
+message. Configure `STREAMING_STT_URL`, `STREAMING_STT_API_KEY`, and
+`STREAMING_STT_MODEL`. The adapter opens sequential sessions limited by
+`STREAMING_STT_BATCH_SECONDS`, preventing inference from exceeding streaming
+gateway heartbeats. Because this contract returns only accumulated text, each
+batch creates one segment with approximate batch boundaries; the adapter
+explicitly declares that it provides neither diarization nor internal
+timestamps.
+
+## Published RSS transcripts
+
+Before STT, the pipeline attempts to consume Podcast Namespace references in
+VTT, SRT, or segmented JSON. Timestamps and speaker names are preserved. Parse
+failures or unsupported formats are recorded in metadata and fall back to the
+configured transcriber.
+
+## Custom profile
+
+With `AI_PROFILE=custom`, configure providers individually:
+
+```dotenv
+TRANSCRIPTION_PROVIDER=openai
+EMBEDDING_PROVIDER=demo
+LLM_PROVIDER=codex_cli
+```
+
+## Local Codex CLI
+
+The `codex_cli` adapter is exclusive to a trusted local process. It calls
+`codex exec` in a read-only sandbox, supplies JSON Schema, and reads the final
+structured result. It must not be enabled in a SaaS worker or receive ChatGPT
+sessions/cookies.
+
+## Adding a provider
+
+Implement one of the ports in `domain/ports.py`, register the adapter in
+`services/providers.py`, expose capabilities, and add contract tests. The
+domain service must not import the new provider's SDK.
