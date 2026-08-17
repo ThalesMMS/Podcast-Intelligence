@@ -175,6 +175,7 @@ make smoke
 
 ## License
 
-MIT. Users are responsible for having authorization to process supplied
+Apache License 2.0. Copyright 2026 Thales Matheus Mendonça Santos. Users are
+responsible for having authorization to process supplied
 content. The code does not attempt to bypass DRM, subscriptions, or access
 controls.

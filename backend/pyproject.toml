@@ -3,7 +3,7 @@ name = "podcast-intelligence"
 version = "0.1.0"
 description = "Podcast ingestion, diarized transcription, summarization and grounded chat"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 authors = [{ name = "Podcast Intelligence contributors" }]
 dependencies = [
   "alembic>=1.14,<2",
