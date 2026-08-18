@@ -1,5 +1,7 @@
 # Podcast Intelligence
 
+![Podcast Intelligence workspace with episode library, transcript, and grounded chat](docs/assets/podcast-intelligence.png)
+
 A modular platform for importing podcasts or audio files, normalizing media,
 transcribing with optional diarization, creating time-aware summaries, indexing
 semantic chunks, and answering questions with clickable citations.
