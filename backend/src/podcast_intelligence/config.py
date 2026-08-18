@@ -57,12 +57,12 @@ class Settings(BaseSettings):
     openai_llm_model: str = "gpt-5.6-luna"
     openai_llm_api: Literal["responses", "chat_completions"] = "responses"
     openai_embedding_send_dimensions: bool = True
-    openai_reasoning_effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "low"
+    openai_reasoning_effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "none"
     openai_max_upload_bytes: int = 24 * 1024 * 1024
     transcription_chunk_seconds: int = 15 * 60
     transcription_chunk_bitrate: str = "64k"
     embedding_dimension: int = Field(default=1536, ge=1, le=16_000)
-    embedding_batch_size: int = Field(default=8, ge=1, le=2048)
+    embedding_batch_size: int = Field(default=4, ge=1, le=2048)
 
     streaming_stt_url: str | None = None
     streaming_stt_api_key: str | None = None
