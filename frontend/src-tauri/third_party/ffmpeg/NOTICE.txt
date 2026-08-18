@@ -1,0 +1,12 @@
+FFmpeg and FFprobe are optional external command-line programs used for media
+normalization and inspection. Native release builds copy target-specific static
+binaries from the descriptinc/ffmpeg-ffprobe-static release selected by the
+build workflow. Those binaries are separate works executed as subprocesses and
+are distributed under their own terms. See GPL-3.0.txt and the upstream build
+metadata included with release artifacts.
+
+Upstream source and corresponding build materials:
+https://github.com/descriptinc/ffmpeg-ffprobe-static
+https://ffmpeg.org/
+
+The Podcast Intelligence source code remains licensed under Apache-2.0.

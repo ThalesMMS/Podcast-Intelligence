@@ -1,6 +1,6 @@
 [project]
 name = "podcast-intelligence"
-version = "0.1.0"
+version = "0.2.0"
 description = "Podcast ingestion, diarized transcription, summarization and grounded chat"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
@@ -34,6 +34,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+desktop = [
+  "pyinstaller>=6.11,<7",
+]
 dev = [
   "httpx>=0.28,<1",
   "httpx2>=2,<3",
@@ -47,6 +50,7 @@ dev = [
 
 [project.scripts]
 podcast-intelligence = "podcast_intelligence.cli:app"
+podcast-intelligence-engine = "podcast_intelligence.desktop.engine:main"
 
 [build-system]
 requires = ["hatchling"]

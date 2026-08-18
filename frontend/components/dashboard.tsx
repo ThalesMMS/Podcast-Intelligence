@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { Link, useNavigate } from "react-router-dom";
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import { ArrowIcon, ClockIcon, LinkIcon, SparkIcon, UploadIcon } from "@/components/icons";
@@ -20,7 +19,7 @@ type SourceType = "direct_url" | "rss" | "apple" | "spotify";
 const importModes: ImportMode[] = ["file", "url"];
 
 export function Dashboard() {
-  const router = useRouter();
+  const navigate = useNavigate();
   const { formatDate, formatNumber, t, tp } = useI18n();
   const [episodes, setEpisodes] = useState<EpisodeBrief[]>([]);
   const [total, setTotal] = useState(0);
@@ -153,7 +152,7 @@ export function Dashboard() {
           rssUrlHint.trim(),
         );
       }
-      router.push(`/episodes/${result.episode_id}`);
+      navigate(`/episodes/${result.episode_id}`);
     } catch (error) {
       setSubmitError(error);
     } finally {
@@ -370,7 +369,7 @@ export function Dashboard() {
           <>
             <div className="episodeList">
               {episodes.map((episode) => (
-                <Link className="episodeRow" href={`/episodes/${episode.id}`} key={episode.id}>
+                <Link className="episodeRow" to={`/episodes/${episode.id}`} key={episode.id}>
                   <EpisodeArtwork episode={episode} />
                   <div className="episodeCopy">
                     <div className="episodeTitleLine">

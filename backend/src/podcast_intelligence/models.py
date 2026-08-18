@@ -393,7 +393,9 @@ class KnowledgeChunk(UUIDMixin, TimestampMixin, Base):
     speaker_labels: Mapped[list[str]] = mapped_column(JsonType, default=list, nullable=False)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False)
     embedding_model: Mapped[str | None] = mapped_column(String(200))
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(), nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector().with_variant(JSON(), "sqlite"), nullable=True
+    )
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JsonType, default=dict, nullable=False)
 
     episode: Mapped[Episode] = relationship(back_populates="chunks")

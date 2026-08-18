@@ -48,6 +48,9 @@ class _Session:
         self.statements.append(statement)
         return next(self.results)
 
+    def get_bind(self) -> Any:
+        return type("PostgreSQLBind", (), {"dialect": postgresql.dialect()})()
+
 
 class _Embeddings:
     model_name = "test-embedding"
@@ -196,3 +199,88 @@ def test_base_query_only_uses_chunks_from_latest_ready_transcript() -> None:
     engine.dispose()
     assert {chunk.text for chunk, _ in workspace_rows} == {"current", "second"}
     assert [chunk.text for chunk, _ in episode_rows] == ["current"]
+
+
+class _LocalEmbeddings:
+    model_name = "desktop-test"
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        assert texts == ["magnetic resonance safety"]
+        return [[1.0, 0.0, 0.0]]
+
+
+def test_sqlite_search_combines_local_vectors_and_lexical_evidence() -> None:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    with Session(engine, expire_on_commit=False) as session:
+        workspace = Workspace(name="Desktop retrieval", slug=f"desktop-{uuid.uuid4()}")
+        session.add(workspace)
+        session.flush()
+        episode = Episode(workspace_id=workspace.id, title="MRI safety")
+        session.add(episode)
+        session.flush()
+        transcript = Transcript(
+            episode_id=episode.id,
+            version=1,
+            status=TranscriptStatus.READY,
+            provider="test",
+            full_text="MRI safety discussion",
+        )
+        session.add(transcript)
+        session.flush()
+        session.add_all(
+            [
+                KnowledgeChunk(
+                    workspace_id=workspace.id,
+                    episode_id=episode.id,
+                    transcript_id=transcript.id,
+                    ordinal=0,
+                    start_ms=0,
+                    end_ms=1000,
+                    text="Magnetic resonance safety and implant screening",
+                    segment_ids=[str(uuid.uuid4())],
+                    speaker_labels=["SPEAKER_00"],
+                    token_count=7,
+                    embedding_model="desktop-test",
+                    embedding=[1.0, 0.0, 0.0],
+                    metadata_json={},
+                ),
+                KnowledgeChunk(
+                    workspace_id=workspace.id,
+                    episode_id=episode.id,
+                    transcript_id=transcript.id,
+                    ordinal=1,
+                    start_ms=1000,
+                    end_ms=2000,
+                    text="Unrelated administrative notes",
+                    segment_ids=[str(uuid.uuid4())],
+                    speaker_labels=["SPEAKER_01"],
+                    token_count=3,
+                    embedding_model="desktop-test",
+                    embedding=[0.0, 1.0, 0.0],
+                    metadata_json={},
+                ),
+            ]
+        )
+        session.commit()
+        settings = Settings(
+            _env_file=None,
+            database_url="sqlite+pysqlite:///:memory:",
+            retrieval_lexical_weight=0.35,
+            retrieval_vector_weight=0.65,
+        )
+        results = RetrievalService(session, settings, _LocalEmbeddings()).search(
+            workspace.id,
+            "magnetic resonance safety",
+            episode_id=episode.id,
+        )
+
+    engine.dispose()
+    assert len(results) == 1
+    assert results[0].text.startswith("Magnetic resonance safety")
+    assert results[0].vector_score == pytest.approx(1.0)
+    assert results[0].lexical_score == pytest.approx(1.0)

@@ -38,6 +38,13 @@ interface ErrorMetadata {
   status?: unknown;
 }
 
+export interface JobErrorPresentation {
+  title: string;
+  message: string;
+  action?: string;
+  technicalDetails?: string;
+}
+
 export class ClientError extends Error {
   constructor(readonly code: ClientErrorCode) {
     super(code);
@@ -56,6 +63,49 @@ export function localizeErrorCode(
 ) {
   const key = code ? ERROR_CODE_KEYS[code] : undefined;
   return t(key ?? fallback);
+}
+
+export function presentJobError(
+  code: string | null | undefined,
+  message: string | null | undefined,
+  currentStep: string | null | undefined,
+  t: Translate,
+): JobErrorPresentation {
+  const technicalDetails = message?.trim() || undefined;
+  const normalized = technicalDetails?.toLowerCase() || "";
+
+  if (
+    currentStep === "index" &&
+    normalized.includes("does not support matryoshka embeddings") &&
+    normalized.includes("dimensions must be unset")
+  ) {
+    return {
+      title: "Embedding request rejected",
+      message: "This embedding model uses a fixed output size and does not accept dimensions.",
+      action:
+        "Turn off “Send the dimensions parameter to the embedding endpoint” in Settings, then retry the job.",
+      technicalDetails,
+    };
+  }
+
+  if (
+    currentStep === "summarize" &&
+    normalized.includes("invalid json") &&
+    (normalized.includes("type=json_invalid") || normalized.includes("input_value='{{"))
+  ) {
+    return {
+      title: "Structured summary output was invalid",
+      message: "The provider returned malformed JSON through the Responses API.",
+      action:
+        "Select Chat Completions under Structured-output API in Settings, then generate the summary again.",
+      technicalDetails,
+    };
+  }
+
+  return {
+    title: localizeErrorCode(code, t, "job.pipelineFailure"),
+    message: technicalDetails || "The job stopped before processing could finish.",
+  };
 }
 
 export function localizeError(error: unknown, t: Translate, fallback: MessageKey) {

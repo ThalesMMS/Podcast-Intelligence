@@ -2,25 +2,62 @@
 
 ## Goals
 
-The system receives episode files or references, produces traceable knowledge
-artifacts, and exposes them through REST, the web interface, and MCP. Its primary
-architectural requirements are:
+Podcast Intelligence receives authorized podcast/audio sources, preserves media
+and transcripts as primary evidence, produces traceable knowledge artifacts,
+and exposes them through a desktop interface, REST, and MCP. The architecture
+must:
 
-1. preserve audio and transcripts as primary sources;
-2. keep every synthesis linked to segments and timestamps;
-3. allow providers to be replaced independently;
-4. run long jobs idempotently and resumably;
-5. isolate data by workspace;
-6. never turn catalog links into unauthorized download mechanisms.
+1. keep summaries and answers linked to timed transcript segments;
+2. allow STT, embedding, and LLM providers to be replaced independently;
+3. make long jobs idempotent and resumable;
+4. isolate stored data by workspace;
+5. reject unsafe remote-media fetches;
+6. run as a self-contained single-user desktop application;
+7. retain a scalable server deployment without forking domain logic.
 
-## System shape
+## One domain layer, two runtime profiles
+
+The repository is a modular monolith with two composition roots.
+
+### Desktop profile
+
+```text
+┌───────────────────────────────────────────────────────────┐
+│ Tauri process (Rust)                                      │
+│  native window · lifecycle · dialogs · opener · app paths │
+│                         │                                 │
+│               per-launch loopback token                   │
+│                         ▼                                 │
+│ React/Vite assets ──HTTP──► packaged FastAPI engine       │
+│                                  │                        │
+│                 ┌────────────────┼────────────────┐       │
+│                 ▼                ▼                ▼       │
+│              SQLite       local object store   job pool   │
+│                 │                │                │       │
+│                 └──────────── existing pipeline ─┘       │
+│                                  │                        │
+│                           FFmpeg/FFprobe                   │
+│                                  │                        │
+│                    STT / embeddings / LLM ports           │
+│                                  │                        │
+│                        optional local MCP process          │
+└───────────────────────────────────────────────────────────┘
+```
+
+Tauri starts the engine sidecar, reads a structured `listening` event from its
+stdout, waits for `/health/ready`, and only then exposes the API address to the
+frontend. The API binds to a random loopback port. MCP prefers loopback port 8001 and falls back to an available port. The REST API requires a
+random per-launch `X-Desktop-Token`; upload/playback routes use short-lived HMAC
+URLs instead.
+
+### Server profile
 
 ```text
 Browser / REST client / ChatGPT / Codex
                 │
         ┌───────┴────────┐
         │                │
-   Next.js web       MCP server
+   Vite web UI       MCP server
         │                │
         └───────┬────────┘
                 │
@@ -41,29 +78,30 @@ resolvers     FFmpeg         AI provider ports
               S3/MinIO
 ```
 
-The repository is a **modular monolith**. The API, worker, and MCP server share
-the domain, models, and services, but run as independent processes and
-containers. This shape keeps transactions and schema evolution simple without
-preventing horizontal worker scaling.
+API, worker, beat, and MCP remain separate processes in server mode. Both modes
+reuse the same models, services, adapters, API contracts, and tests wherever the
+storage/backend difference does not require a dialect-specific implementation.
 
 ## Module boundaries
 
-- `domain`: provider-agnostic types, ports, and errors.
+- `domain`: provider-neutral types, ports, and errors.
 - `adapters/resolvers`: upload, direct media, RSS, Apple, and Spotify.
-- `adapters/media`: URL validation, downloads, and FFmpeg.
-- `adapters/object_store`: S3-compatible storage.
-- `adapters/ai`: demo, OpenAI, and local Codex CLI.
-- `services/imports`: episode and job creation.
-- `services/pipeline`: idempotent state machine.
-- `services/chunking`: speaker-aware segmentation.
-- `services/retrieval`: hybrid lexical/vector search.
+- `adapters/media`: safe HTTP downloads, transcript loading, and FFmpeg.
+- `adapters/object_store`: S3-compatible and signed local-filesystem stores.
+- `adapters/ai`: demo, OpenAI-compatible, streaming STT, and Codex CLI.
+- `services/imports`: episode/job creation and durable dispatch outbox.
+- `services/pipeline`: idempotent processing state machine.
+- `services/chunking`: speaker-aware transcript segmentation.
+- `services/retrieval`: PostgreSQL and portable desktop hybrid search.
 - `services/summarization`: validated hierarchical synthesis.
-- `services/chat`: conversations and citation materialization.
-- `api`: HTTP contracts and authorization.
-- `worker`: asynchronous execution and retries.
-- `mcp_server`: tools for ChatGPT/Codex.
+- `services/chat`: conversations, retrieval, answers, and citations.
+- `api`: stable HTTP contracts and authorization.
+- `worker`: Celery server runtime.
+- `desktop`: packaged engine entrypoint and in-process worker runtime.
+- `mcp_server`: streamable-HTTP tools.
+- `frontend/src-tauri`: native host, bundle, permissions, and sidecars.
 
-## Pipeline
+## Pipeline and durability
 
 ```text
 resolve_source
@@ -75,83 +113,128 @@ resolve_source
   → finalize
 ```
 
-Every step has a state, attempts, timestamps, error, and metrics. A step is
-skipped when a compatible artifact already exists. Where applicable,
-compatibility considers the transcript, version, and embedding model.
+Every step stores status, attempts, timestamps, error text, and metrics. A step
+is skipped when compatible output already exists. Compatibility includes
+transcript versions and embedding models where relevant.
 
-Every execution acquires a PostgreSQL advisory lock derived from the job ID and
-keeps the same connection throughout the pipeline. Duplicate Celery deliveries
-return without calling providers. Because the lock belongs to the connection,
-PostgreSQL releases it when a worker exits or loses the connection, allowing
-redelivery; completed steps remain skipped. SQLite uses a per-process lock only
-for tests and local development.
+### Server locking
+
+PostgreSQL advisory locks serialize a job by ID. The lock belongs to the
+connection, so a crashed worker releases it automatically. Celery redelivery is
+safe because completed steps are reused.
+
+### Desktop locking and recovery
+
+SQLite stores the same job and dispatch rows. A bounded thread pool executes the
+pipeline, while a poller claims durable outbox rows. Process-local job locks
+prevent duplicate execution. At startup, jobs left in `running` or `retrying`
+are changed back to `queued`, running steps return to `pending`, and dispatch
+rows become available again. Transient provider/network failures use bounded
+exponential retry; exhausted rows are dead-lettered while preserving the
+pipeline's failure context.
+
+## Media storage
+
+### Desktop
+
+Object keys retain the original workspace/episode layout but resolve beneath a
+single private `objects/` root. Path traversal is rejected. Upload and playback
+URLs contain signed JSON claims with operation, object key, expiry, and expected
+upload metadata. The upload endpoint verifies exact byte count and MIME type.
+The player receives an expiring signed URL and renews it as needed.
+
+### Server
+
+The S3 adapter uses presigned POST and GET URLs and can target MinIO or another
+S3-compatible service.
+
+## Database and vector representation
+
+The SQLAlchemy model uses PostgreSQL `vector` in server mode and JSON arrays in
+SQLite. This preserves the same embedding values and model metadata.
+
+### PostgreSQL retrieval
+
+- pgvector cosine distance;
+- `websearch_to_tsquery` and `ts_rank_cd` using the `simple` configuration;
+- model-aware vector filtering;
+- weighted lexical/vector merge.
+
+### SQLite retrieval
+
+- deterministic Unicode token coverage and exact-phrase bonus;
+- cosine similarity calculated in Python;
+- same configurable lexical/vector weights;
+- latest ready transcript and workspace filtering;
+- safety cap of 10,000 candidate chunks per query.
+
+The desktop fallback deliberately avoids optional SQLite native extensions, so
+packaged behavior is identical on Windows and macOS. PostgreSQL remains the
+preferred profile for very large multi-user collections.
 
 ## Immutable and derived artifacts
 
-- Original: object received or downloaded from an authorized source.
-- Processing: PCM WAV, mono, 16 kHz by default.
-- Playback: M4A/AAC for the player.
-- Transcript: a version of the text and timed segments.
-- KnowledgeChunk: text, segment IDs, speakers, and vector.
-- Summary: structured document tied to a transcript version.
-- Message: answer, retrieved context, and materialized citations.
+- **Original**: file supplied or downloaded from an authorized source.
+- **Processing**: mono PCM WAV, 16 kHz by default.
+- **Playback**: M4A/AAC for the player.
+- **Transcript**: versioned full text and timed speaker segments.
+- **KnowledgeChunk**: text, segment IDs, speakers, token count, and vector.
+- **Summary**: structured document bound to a transcript version.
+- **Message**: answer, retrieved context, and materialized citations.
 
-## Retrieval
+Generated summaries and answers do not become evidence. Literal citation text
+is read from stored transcript segments after model output is validated.
 
-A query combines:
+## Provider isolation
 
-1. the question embedding;
-2. cosine distance in pgvector;
-3. PostgreSQL `websearch_to_tsquery` and `ts_rank_cd`;
-4. score normalization;
-5. configurable weights;
-6. a mandatory workspace filter and optional episode filter.
+`ProviderRegistry` composes independent ports for:
 
-The vector column accepts different dimensions by model. Vector retrieval must
-filter by the active model so it never compares incompatible dimensions.
-Dimensions above pgvector's approximate-index limit use exact search; lexical
-search remains indexed by GIN.
+- transcription;
+- embeddings;
+- language-model generation;
+- source resolution;
+- object storage;
+- media processing.
 
-Literal speech displayed in a citation comes from `transcript_segments`. The LLM
-only selects allowed IDs; it does not write the final citation.
+The desktop settings dialog writes supported provider values to `settings.json`
+and restarts the engine. The engine converts allowed values to environment
+settings before importing application modules, preserving the existing
+Pydantic configuration and provider validation.
 
-## Library refresh
+## MCP
 
-The frontend requests the library immediately when the page opens. New requests
-are scheduled every five seconds only while episodes are `queued` or
-`processing`. Scheduling is recursive and begins after the previous request
-finishes, preventing overlap and stale responses.
+Desktop mode can start a second instance of the packaged engine in MCP-only
+mode. It shares the same SQLite database and provider configuration, prefers loopback port 8001, falls back when necessary, and exposes the existing tools:
 
-Polling pauses and cancels the current request when the tab becomes hidden, then
-resumes immediately on the visibility event. Failures apply exponential backoff
-from ten to sixty seconds. When every item reaches a terminal state, no new
-request occurs until an explicit refresh or a new page mount.
+- `search`;
+- `fetch`;
+- `list_episodes`;
+- `ask_episode`;
+- `create_summary`.
 
-## Large transcripts
+This local MCP service is intended for a trusted user on the same computer. It
+is not a public multi-user OAuth deployment.
 
-`GET /v1/episodes/{id}/transcript` returns up to 100 segments by default and
-accepts at most 200. The opaque cursor is bound to transcript version, last
-ordinal, and normalized query, preserving a stable order. `q` runs server-side
-search, and `at_ms` returns a page containing the segment for that timestamp.
-Full text remains available for processing and exports but is not repeated in
-interface pages.
+## Frontend
 
-The frontend loads more pages on demand and virtualizes loaded segments with
-dynamic height measurement and overscan. Editing a speaker replaces only that
-object in already loaded segments; future pages read the updated value from the
-server.
+The prior Next.js application was migrated to React 19 + Vite + HashRouter.
+Existing components, CSS, polling behavior, transcript virtualization,
+localization, playback recovery, and accessibility helpers were retained.
 
-Targets for the reference transcript:
+A runtime adapter separates browser/server behavior from Tauri behavior:
 
-- a page response with at most 200 segments and 256 KiB;
-- fewer than 30 segment rows mounted in a 760 px viewport;
-- first render and search response within 500 ms in the reference local
-  environment;
-- no loss of order or precision when opening a page by timestamp.
+- browser mode reads `VITE_API_URL` and uses normal downloads/links;
+- Tauri mode receives the dynamic API URL/token through an invoke command;
+- exports use native save dialogs;
+- external HTTP(S) links use the opener plugin;
+- invalid engine settings expose a recovery screen.
 
-## Production evolution
+## Packaging boundary
 
-Celery can be replaced by Temporal at the orchestration boundary without
-changing the domain model. A separate vector database should be introduced only
-after metrics demonstrate a real PostgreSQL limit. Local WhisperX/pyannote
-processing can be added as new adapters for the same ports.
+PyInstaller creates one engine executable per operating system/architecture.
+Tauri requires external sidecars named with the target triple and bundles the
+engine, FFmpeg, and FFprobe alongside the native host. The pipeline therefore
+builds natively on each target rather than attempting unsupported universal
+cross-compilation.
+
+See [Desktop packaging](desktop-packaging.md).

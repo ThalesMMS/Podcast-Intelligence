@@ -2,38 +2,61 @@
 .env
 .env.*
 !.env.example
+.venv/
+venv/
+settings.json
+engine-secret
+*.sqlite
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
 
 # Python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-.venv/
-backend/.venv/
-*.egg-info/
 .coverage
+coverage.xml
 htmlcov/
+backend/build/
+backend/dist/
 
-# Node
+# Node / Vite
 node_modules/
-frontend/.next/
-frontend/next-env.d.ts
-frontend/out/
-frontend/.turbo/
+frontend/dist/
+frontend/coverage/
+frontend/.vite/
 frontend/tsconfig.tsbuildinfo
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
-# Runtime artifacts
-.local-data/
-*.wav
-*.mp3
-*.m4a
-*.ogg
-*.flac
-*.mp4
+# Tauri / Rust
+frontend/src-tauri/target/
+frontend/src-tauri/gen/
+frontend/src-tauri/binaries/*
+!frontend/src-tauri/binaries/README.md
+frontend/src-tauri/third_party/ffmpeg/SOURCE.json
+frontend/src-tauri/third_party/ffmpeg/UPSTREAM-LICENSE.txt
+frontend/src-tauri/third_party/ffmpeg/UPSTREAM-README.txt
 
-# Editors / OS
+# Generated media/build artifacts
+build/
+*.dmg
+*.msi
+*.app/
+*.exe
+*.AppImage
+*.deb
+*.rpm
+
+# Editors and operating systems
 .DS_Store
+__MACOSX/
 .idea/
 .vscode/
+*.swp

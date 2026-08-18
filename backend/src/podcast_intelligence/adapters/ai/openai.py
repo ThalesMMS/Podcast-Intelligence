@@ -40,7 +40,7 @@ class OpenAITranscriber:
         self.model_name = settings.openai_transcription_model
         self.client = OpenAI(
             api_key=settings.openai_key_for("transcription"),
-            base_url=settings.openai_base_url,
+            base_url=settings.openai_base_url_for("transcription"),
         )
 
     def _run_media_command(self, command: list[str], *, timeout: int = 7200) -> str:
@@ -365,7 +365,7 @@ class OpenAIEmbeddingProvider:
         self.dimension = settings.embedding_dimension
         self.client = OpenAI(
             api_key=settings.openai_key_for("embedding"),
-            base_url=settings.openai_base_url,
+            base_url=settings.openai_base_url_for("embedding"),
         )
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
@@ -405,7 +405,7 @@ class OpenAILanguageModel:
         self.model_name = settings.openai_llm_model
         self.client = OpenAI(
             api_key=settings.openai_key_for("llm"),
-            base_url=settings.openai_base_url,
+            base_url=settings.openai_base_url_for("llm"),
         )
 
     def _parse(self, instructions: str, payload: str, output_type: type[TModel]) -> TModel:

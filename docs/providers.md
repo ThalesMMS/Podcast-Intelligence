@@ -1,5 +1,9 @@
 # AI providers
 
+In the native application these values are edited under **Settings** and saved
+to the private application-data directory. Saving restarts the packaged engine.
+Server mode uses the equivalent environment variables shown below.
+
 ## Demo profile
 
 The `demo` profile uses no external key. It provides:
@@ -17,19 +21,23 @@ Do not use demo transcription for decisions or acoustic-quality evaluation.
 
 - `gpt-4o-transcribe-diarize` by default for speaker-attributed segments;
 - `text-embedding-3-small` with dimension 1536;
-- the Responses API with Structured Outputs for summaries and answers.
+- Chat Completions with Structured Outputs for summaries and answers.
 
 By default, all three clients use `OPENAI_API_KEY`. Gateways with separate
 credentials can set `OPENAI_TRANSCRIPTION_API_KEY`,
 `OPENAI_EMBEDDING_API_KEY`, and `OPENAI_LLM_API_KEY`; a specific key takes
-precedence over the shared key. `OPENAI_BASE_URL` is common to all three.
+precedence over the shared key. `OPENAI_BASE_URL` is the shared URL fallback.
+Set `OPENAI_TRANSCRIPTION_BASE_URL`, `OPENAI_EMBEDDING_BASE_URL`, or
+`OPENAI_LLM_BASE_URL` when the clients use different HTTP-compatible gateways.
 
-Use `OPENAI_LLM_API=chat_completions` when the gateway implements Structured
-Outputs in that API but not in Responses. For embeddings without support for
-the `dimensions` parameter, set `OPENAI_EMBEDDING_SEND_DIMENSIONS=false` and
-configure `EMBEDDING_DIMENSION` with the native dimension. The database accepts
-dimensions by model, and vector search filters by the active model; vectors
-above the HNSW indexing limit use exact search.
+Chat Completions is the compatibility default. Set `OPENAI_LLM_API=responses`
+only when the gateway implements Structured Outputs correctly in Responses.
+The embedding request omits `dimensions` by default; configure
+`EMBEDDING_DIMENSION` with the model's native dimension. Set
+`OPENAI_EMBEDDING_SEND_DIMENSIONS=true` only for models that support selecting
+an output size. The database accepts dimensions by model, and vector search
+filters by the active model; vectors above the HNSW indexing limit use exact
+search.
 
 The adapter validates outputs with Pydantic models and restricts cited IDs to
 the supplied segments. Audio above the configured limit is converted to MP3,
@@ -61,10 +69,19 @@ configured transcriber.
 With `AI_PROFILE=custom`, configure providers individually:
 
 ```dotenv
-TRANSCRIPTION_PROVIDER=openai
-EMBEDDING_PROVIDER=demo
-LLM_PROVIDER=codex_cli
+TRANSCRIPTION_PROVIDER=streaming_ws
+STREAMING_STT_URL=ws://gateway.example/v1/audio/transcriptions/stream
+EMBEDDING_PROVIDER=openai
+OPENAI_EMBEDDING_BASE_URL=http://gateway.example/v1
+LLM_PROVIDER=openai
+OPENAI_LLM_BASE_URL=http://gateway.example/v1
 ```
+
+HTTP-compatible base URLs must use `http://` or `https://`; streaming
+transcription must use `ws://` or `wss://`. For compatibility with desktop
+settings saved by earlier builds, a WebSocket URL found in
+`OPENAI_TRANSCRIPTION_BASE_URL` is migrated at startup to the streaming
+transcriber together with its transcription key and model.
 
 ## Local Codex CLI
 

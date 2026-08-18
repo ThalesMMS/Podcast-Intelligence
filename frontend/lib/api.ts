@@ -10,7 +10,13 @@ import type {
 } from "@/lib/types";
 import { ClientError } from "@/lib/errors";
 
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+export let API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
+let desktopApiToken: string | null = import.meta.env.VITE_API_TOKEN ?? null;
+
+export function configureApi(baseUrl: string, token: string | null) {
+  API_BASE_URL = baseUrl.replace(/\/$/, "");
+  desktopApiToken = token;
+}
 
 export class APIError extends Error {
   constructor(
@@ -63,31 +69,56 @@ function mediaContentType(file: File): string {
   return contentType;
 }
 
-export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+function requestHeaders(init?: RequestInit): Headers | undefined {
   const headers = new Headers(init?.headers);
   const hasJsonBody = typeof init?.body === "string";
   if (hasJsonBody && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
+  if (desktopApiToken) headers.set("X-Desktop-Token", desktopApiToken);
+  return init?.headers !== undefined || hasJsonBody || desktopApiToken ? headers : undefined;
+}
+
+async function parseError(response: Response): Promise<APIError> {
+  const rawPayload: unknown = await response.json().catch(() => null);
+  const payload = isErrorPayload(rawPayload) ? rawPayload : null;
+  const message =
+    (typeof payload?.message === "string" ? payload.message : null) ??
+    formatValidationDetail(payload?.detail) ??
+    `HTTP request failed with status ${response.status}`;
+  return new APIError(
+    message,
+    response.status,
+    typeof payload?.code === "string" ? payload.code : undefined,
+  );
+}
+
+async function authenticatedFetch(path: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    headers: init?.headers !== undefined || hasJsonBody ? headers : undefined,
+    headers: requestHeaders(init),
     cache: "no-store",
   });
-  if (!response.ok) {
-    const rawPayload: unknown = await response.json().catch(() => null);
-    const payload = isErrorPayload(rawPayload) ? rawPayload : null;
-    const message =
-      (typeof payload?.message === "string" ? payload.message : null) ??
-      formatValidationDetail(payload?.detail) ??
-      `HTTP request failed with status ${response.status}`;
-    throw new APIError(
-      message,
-      response.status,
-      typeof payload?.code === "string" ? payload.code : undefined,
-    );
-  }
+  if (!response.ok) throw await parseError(response);
+  return response;
+}
+
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await authenticatedFetch(path, init);
   return (await response.json()) as T;
+}
+
+function exportFilename(disposition: string | null, fallback: string): string {
+  const encoded = disposition?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return fallback;
+    }
+  }
+  const quoted = disposition?.match(/filename="([^"]+)"/i)?.[1];
+  return quoted || fallback;
 }
 
 export const api = {
@@ -208,4 +239,14 @@ export const api = {
         options: { language: language || null, diarization: false, generate_summary: true },
       }),
     }),
+  downloadExport: async (episodeId: string, format: "markdown" | "json" | "srt" | "vtt") => {
+    const response = await authenticatedFetch(`/v1/episodes/${episodeId}/exports/${format}`);
+    return {
+      contents: await response.text(),
+      filename: exportFilename(
+        response.headers.get("Content-Disposition"),
+        `podcast-${episodeId}.${format === "markdown" ? "md" : format}`,
+      ),
+    };
+  },
 };

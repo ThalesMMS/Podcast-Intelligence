@@ -1,9 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { Dashboard } from "../components/dashboard";
 import { renderWithLocale } from "./i18n-test-utils";
-
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 describe("dashboard localization", () => {
   it("renders the full import surface in English", () => {

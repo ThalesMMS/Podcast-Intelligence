@@ -17,6 +17,7 @@ from podcast_intelligence.adapters.ai.streaming_stt import StreamingWebSocketTra
 from podcast_intelligence.adapters.media.ffmpeg import FFmpegProcessor
 from podcast_intelligence.adapters.media.published_transcript import PublishedTranscriptLoader
 from podcast_intelligence.adapters.media.safe_http import SafeHTTPClient
+from podcast_intelligence.adapters.object_store.local import LocalObjectStore
 from podcast_intelligence.adapters.object_store.s3 import S3ObjectStore
 from podcast_intelligence.adapters.resolvers.apple import ApplePodcastResolver
 from podcast_intelligence.adapters.resolvers.direct import DirectMediaResolver
@@ -28,6 +29,7 @@ from podcast_intelligence.domain.ports import (
     EmbeddingProvider,
     EpisodeResolver,
     LanguageModel,
+    ObjectStore,
     Transcriber,
 )
 from podcast_intelligence.domain.types import ProviderCapabilities
@@ -38,7 +40,7 @@ from podcast_intelligence.enums import SourceType
 class ProviderRegistry:
     settings: Settings
     http: SafeHTTPClient
-    object_store: S3ObjectStore
+    object_store: ObjectStore
     media: FFmpegProcessor
     published_transcripts: PublishedTranscriptLoader
     transcriber: Transcriber
@@ -91,7 +93,11 @@ def _require_openai_key(
 
 def build_registry(settings: Settings) -> ProviderRegistry:
     http = SafeHTTPClient(settings)
-    object_store = S3ObjectStore(settings)
+    object_store: ObjectStore
+    if settings.object_store_provider == "local":
+        object_store = LocalObjectStore(settings)
+    else:
+        object_store = S3ObjectStore(settings)
     media = FFmpegProcessor(settings)
     published_transcripts = PublishedTranscriptLoader(http)
     rss = RSSResolver(http)

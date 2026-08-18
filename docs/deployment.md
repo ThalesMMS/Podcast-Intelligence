@@ -1,101 +1,145 @@
 # Deployment and operations
 
-## Development
+Podcast Intelligence supports a native single-user desktop profile and a
+networked server profile. Choose one deliberately; they have different security,
+scaling, and backup boundaries.
 
-```bash
-cp .env.example .env
-docker compose up --build
-docker compose run --rm api python -m podcast_intelligence.cli seed-demo
+## Desktop deployment
+
+### Intended use
+
+Desktop mode is for a trusted user on one Mac or Windows PC. It requires no
+locally installed database, message broker, object store, Python, or Docker after
+packaging.
+
+The Tauri host starts its API on a random loopback port; MCP prefers port 8001 and falls back when occupied. Do not configure a
+firewall exception or expose those ports to another host. The REST API is
+protected by a per-launch token and media routes by short-lived HMAC URLs, but
+this is local-process isolation, not multi-user authentication.
+
+### Installation
+
+Distribute the signed/notarized platform bundle produced by the native build
+matrix. Do not distribute a source ZIP as though it were an installer. Windows
+and each macOS architecture require their own tested output.
+
+### Updates
+
+The current project does not enable an automatic updater. A release should:
+
+1. keep the Tauri identifier unchanged;
+2. preserve the operating system application-data directory;
+3. create a backup before any future destructive schema migration;
+4. test upgrade from the previous released version;
+5. replace application binaries without deleting user data.
+
+SQLite tables are currently created idempotently from SQLAlchemy metadata.
+Before changing existing columns or constraints, add a versioned desktop
+migration mechanism rather than relying on `create_all`.
+
+### Backup and restore
+
+Close the app and copy the complete app data directory. Required components are:
+
+- `podcast-intelligence.sqlite3`;
+- `objects/`;
+- `settings.json` when provider configuration must be retained;
+- `engine-secret` when preserving already issued local-token semantics matters
+  (tokens are short-lived, so this is usually relevant only as part of a full
+  consistent copy).
+
+Restore all files to the same Tauri-resolved app-data location before launch.
+A database without matching objects can reference missing audio; objects without
+the database are not indexed or visible.
+
+### Privacy and retention
+
+Audio, transcripts, embeddings, summaries, questions, and provider credentials
+remain on disk until manually removed. The interface does not yet implement a
+complete deletion/retention workflow. Provider-backed operations transmit the
+necessary content to the configured external service; review that provider's
+terms and data controls.
+
+### Logs and support
+
+The engine writes operational output to the Tauri process stderr in current
+builds. Avoid collecting logs that include private URLs, transcript text, or
+credentials. A future production release should add bounded rotating logs with
+explicit redaction and a user-controlled diagnostics export.
+
+## Server deployment
+
+The Compose file is suitable for local development, not high availability.
+Before network deployment:
+
+1. set `APP_ENV=production`;
+2. replace every development secret;
+3. configure `AUTH_MODE=oidc` with issuer, audience, and JWKS URL;
+4. terminate TLS at a trusted reverse proxy;
+5. keep PostgreSQL, Redis, and MinIO on private networks;
+6. use managed backups and encryption at rest;
+7. restrict CORS to the real frontend origin;
+8. configure retention, deletion, and audit policies;
+9. scan dependencies and container images;
+10. perform threat modeling and penetration testing.
+
+### Database
+
+Use managed PostgreSQL with the `vector` extension. Run Alembic migrations as a
+separate release step. Do not let every horizontally scaled API replica race to
+migrate the schema.
+
+Back up PostgreSQL and S3/MinIO as one logical dataset. Redis is a queue/cache;
+its loss should not delete completed artifacts, but jobs should be reconciled
+from the durable dispatch outbox.
+
+### Worker scaling
+
+API and MCP are stateless apart from database/object-store access. Celery
+workers can scale independently. PostgreSQL advisory locks and idempotent steps
+make duplicate delivery safe, but provider rate limits and cost controls still
+need deployment-specific concurrency settings.
+
+### Object storage
+
+Use private buckets, least-privilege credentials, TLS, lifecycle policies, and
+server-side encryption. Presigned URLs must remain short-lived. `S3_PUBLIC_ENDPOINT_URL`
+must be reachable by the intended browser without exposing an administrative
+console.
+
+### MCP
+
+The included MCP server assumes one configured workspace. A public deployment
+requires per-user OAuth, workspace authorization on every tool, HTTPS, and
+provider/data isolation. Do not publish the local development MCP endpoint as a
+multi-user service.
+
+## Health checks
+
+Desktop readiness reports:
+
+```json
+{
+  "status": "ready",
+  "checks": {
+    "database": "ok",
+    "object_store": "ok",
+    "job_runner": "local"
+  }
+}
 ```
 
-## Process separation
+Server readiness additionally checks Redis. Object-store and database failures
+must fail readiness so the process is removed from service.
 
-- API: light CPU usage and low latency.
-- Worker: CPU/GPU and long jobs; scale by queue and provider type.
-- MCP: low latency, streamable HTTP, and independent authentication.
-- Frontend: static/standalone build.
-- PostgreSQL, Redis, and S3: managed services in production.
+## Disaster-recovery testing
 
-## Mandatory controls before public exposure
+A backup is not complete until a restore test verifies:
 
-- `APP_ENV=production` and `AUTH_MODE=oidc`;
-- random secrets and a secret manager;
-- TLS and private networking for the database, Redis, and storage;
-- restricted CORS;
-- private bucket and short-lived presigned URLs;
-- retention and cascading deletion;
-- size, duration, rate, and concurrency limits;
-- auditing of speaker changes and deletions;
-- tested backups;
-- queue, latency, failure, and cost observability;
-- a data policy for voice and protected content.
-
-## Scalability
-
-Worker concurrency should reflect the actual bottleneck. For external APIs, use
-per-provider queues and rate limits. For local models, separate GPU workers.
-Redis is not the source of truth; jobs and artifacts remain in PostgreSQL/S3.
-Each job holds a PostgreSQL connection while it owns its advisory lock, so size
-`pool_size + max_overflow` to at least each Celery process's concurrency.
-Exhaustion or transient pool unavailability retries the job with backoff without
-starting providers before a connection is acquired.
-
-## Durable job dispatch
-
-Creating or retrying a job writes a row to `job_dispatches` in the same
-transaction as the `queued` state. Every five seconds, Celery Beat asks a worker
-to publish pending rows. The dispatcher uses `FOR UPDATE SKIP LOCKED`, limits
-each batch, and applies backoff while the broker is unavailable. After
-`DISPATCH_MAX_ATTEMPTS` failures (10 by default), the row receives
-`dead_lettered_at` and no longer occupies batches. A manual retry clears that
-terminal state and restarts the counter.
-
-Each publish attempt also uses five-second connection and socket timeouts and at
-most three short producer retries. A broker partition therefore cannot hold a
-single publication indefinitely. The dispatcher selects, publishes, and
-confirms one row per short transaction up to the batch limit, checking the
-`DISPATCH_RUN_TIME_BUDGET_SECONDS` budget (30 seconds by default) before each
-selection. Once exhausted, no unprocessed rows are held; they remain available
-to another dispatcher or the next Beat cycle.
-
-A failure after publication but before commit can publish the same job more
-than once. This is intentional: the job's advisory lock prevents concurrent
-execution, and completed steps remain idempotent. Monitor pending-row count,
-`attempts`, `available_at`, `dead_lettered_at`, and `last_error`; a growing
-backlog indicates broker unavailability or a missing `beat` service.
-Dead-letter rows require investigation and an explicit retry after the cause is
-fixed. `last_error` records only the publication exception category, never raw
-text that could contain a DSN or broker credentials.
-
-## Migrations
-
-The API runs `alembic upgrade head` in local Compose. In production, run
-migrations as a single release job before updating API replicas.
-
-## Observability
-
-- `/health/live`: active process.
-- `/health/ready`: PostgreSQL, S3, and Redis.
-- `/metrics`: Prometheus HTTP metrics.
-- structured JSON logs.
-- `provider_runs`: latency and metadata per call.
-
-## Lexical-search benchmark
-
-Before promoting retrieval changes, load at least 100,000 `knowledge_chunks`
-distributed across 100 episodes in one workspace and run
-`EXPLAIN (ANALYZE, BUFFERS)` after `ANALYZE knowledge_chunks`. The query should:
-
-- filter by workspace and, when supplied, episode;
-- use `to_tsvector('simple'::regconfig, text) @@
-  websearch_to_tsquery('simple'::regconfig, :query)`;
-- show `Bitmap Index Scan` or `Index Scan` on `ix_knowledge_chunks_fts`;
-- keep p95 below 150 ms across 20 warmed queries on PostgreSQL 16 with 4 vCPU
-  and enough cache for the index.
-
-The opt-in test `backend/tests/test_retrieval_postgres.py` validates correctness
-and the GIN plan with 10,000 rows. Set `TEST_POSTGRES_URL` to a disposable test
-PostgreSQL database; the test uses only a temporary table.
-
-Distributed OpenTelemetry is the recommended extension for correlating the API,
-Celery, providers, and storage.
+- episode list and metadata;
+- playback of stored media;
+- transcript pagination;
+- summary retrieval;
+- grounded chat/search against matching embeddings;
+- queued-job recovery;
+- provider settings loaded without exposing credentials in logs.

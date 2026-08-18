@@ -4,7 +4,7 @@ import { useEffect, useId, useState } from "react";
 
 import { AlertIcon, CheckIcon, ClockIcon } from "@/components/icons";
 import { StatusBadge } from "@/components/status-badge";
-import { localizeErrorCode } from "@/lib/errors";
+import { presentJobError } from "@/lib/errors";
 import { formatStatus } from "@/lib/format";
 import type { MessageKey } from "@/lib/i18n/messages";
 import { useI18n } from "@/lib/i18n/provider";
@@ -48,6 +48,10 @@ export function JobPanel({ job }: { job: Job | null }) {
   const mode = getJobPanelMode(job.status);
   const percent = Math.round(job.progress * 100);
   const localizedPercent = formatNumber(percent);
+  const error =
+    job.error_code || job.error_message
+      ? presentJobError(job.error_code, job.error_message, job.current_step, t)
+      : null;
   return (
     <aside className={`jobPanel jobPanel-${mode}${expanded ? " jobPanel-expanded" : ""}`}>
       <div className="jobPanelHeader">
@@ -97,11 +101,19 @@ export function JobPanel({ job }: { job: Job | null }) {
             </li>
           ))}
         </ol>
-        {job.error_code || job.error_message ? (
-          <div className="jobError">
+        {error ? (
+          <div className="jobError" role="alert">
             <AlertIcon size={18} />
             <div>
-              <strong>{localizeErrorCode(job.error_code, t, "job.pipelineFailure")}</strong>
+              <strong>{error.title}</strong>
+              <p>{error.message}</p>
+              {error.action ? <p className="jobErrorAction">{error.action}</p> : null}
+              {error.technicalDetails ? (
+                <details>
+                  <summary>Technical details</summary>
+                  <pre>{error.technicalDetails}</pre>
+                </details>
+              ) : null}
             </div>
           </div>
         ) : null}

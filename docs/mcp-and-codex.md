@@ -1,64 +1,90 @@
 # MCP, ChatGPT, and Codex
 
-## Selected form
+## Tools
 
-The server is a **tool-only** MCP application. It reuses the product domain and
-database; it does not contain a second index or duplicate widget.
+The MCP server reuses the product database and domain services; it does not
+maintain a second transcript index.
 
-Tools:
+- `search`: hybrid knowledge search;
+- `fetch`: retrieve an episode, chunk, or segment;
+- `list_episodes`: list the current workspace;
+- `ask_episode`: grounded answer without persisting a UI conversation;
+- `create_summary`: idempotent summary creation/regeneration.
 
-- `search`: standard reusable search;
-- `fetch`: retrieves an episode, chunk, or segment;
-- `list_episodes`: lists the library;
-- `ask_episode`: grounded answer without persisting a conversation;
-- `create_summary`: idempotent write operation.
+## Desktop endpoint
 
-The local endpoint is `http://localhost:8001/mcp`.
+The desktop engine attempts to bind MCP to:
 
-## Codex
+```text
+http://127.0.0.1:8001/mcp
+```
 
-After starting the project:
+If port 8001 is occupied, it selects an available loopback port instead. Open
+**Settings → Local runtime** and copy the exact current endpoint. The endpoint
+changes only when a fallback port is required or the engine is restarted with a
+different runtime allocation.
+
+Register it in Codex:
 
 ```bash
-codex mcp add podcast-intelligence --url http://localhost:8001/mcp
+codex mcp add podcast-intelligence --url http://127.0.0.1:8001/mcp
 codex mcp list
 ```
 
-For a remote server with OAuth:
+When the settings screen reports another port, use that URL. The desktop MCP
+process shares SQLite and local media metadata with the application.
+
+This endpoint is unauthenticated and loopback-only. Use it only on a trusted,
+single-user computer. A different local process running as the same user can
+attempt to call it.
+
+## Server endpoint
+
+Docker/server mode uses:
+
+```text
+http://localhost:8001/mcp
+```
+
+For a remote deployment with OAuth:
 
 ```bash
 codex mcp add podcast-intelligence --url https://podcasts.example.com/mcp
 codex mcp login podcast-intelligence
 ```
 
+Before publishing, implement OAuth 2.1/protected-resource discovery and derive
+the workspace from the authenticated identity in every tool.
+
 ## ChatGPT Developer Mode
 
-For local testing, expose MCP through an HTTPS tunnel and register the public
-URL ending in `/mcp` under **Settings → Apps & Connectors → Advanced settings**.
-Refresh the connection after changing tool descriptors.
+A loopback-only endpoint is not directly reachable by ChatGPT's hosted
+connector environment. For controlled development, expose MCP through an HTTPS
+tunnel and register the public URL ending in `/mcp` under the applicable Apps &
+Connectors developer settings. Do not tunnel a private podcast library without
+authentication and explicit authorization.
 
-## Production authentication
+## Codex as the language-model provider
 
-The local scaffold uses a fixed workspace in the MCP process. Before publishing:
+The desktop settings dialog can select `codex_cli` for the LLM port. Requirements:
 
-1. place MCP behind stable HTTPS;
-2. implement OAuth 2.1 and protected-resource discovery;
-3. derive the workspace from the authenticated identity;
-4. validate authorization in every tool;
-5. define CSP and app metadata when a widget exists;
-6. keep provider credentials out of MCP results.
+1. install the Codex CLI on the same machine;
+2. run `codex login` as the desktop user;
+3. enter `codex` or the absolute executable path in Settings;
+4. optionally select a model override;
+5. save and restart the engine.
 
-## Codex as a local LLM
+The adapter runs `codex exec` in a read-only sandbox and a dedicated app-data
+working directory, supplies a JSON Schema, and validates the structured result.
+It is intended only for a trusted local host. It must not receive browser
+cookies or be exposed as a SaaS worker.
 
-To use the existing Codex authentication as a local engine:
+In server development, the equivalent environment is:
 
 ```bash
-codex login
 cd backend
 LLM_PROVIDER=codex_cli uv run celery \
   -A podcast_intelligence.worker.celery_app:celery_app worker --loglevel=INFO
 ```
 
-This flow must run on the user's trusted host. Compose does not mount the Codex
-authentication directory and does not attempt to turn a ChatGPT login into a
-generic API key.
+Compose deliberately does not mount Codex authentication credentials.

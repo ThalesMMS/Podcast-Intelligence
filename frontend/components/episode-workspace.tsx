@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { Link } from "react-router-dom";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatView } from "@/components/chat-view";
@@ -16,10 +16,11 @@ import { JobPanel } from "@/components/job-panel";
 import { StatusBadge } from "@/components/status-badge";
 import { SummaryView } from "@/components/summary-view";
 import { TranscriptView } from "@/components/transcript-view";
-import { API_BASE_URL, api } from "@/lib/api";
+import { api } from "@/lib/api";
 import { createEpisodePoller } from "@/lib/episode-polling";
 import { localizeError } from "@/lib/errors";
 import { formatDuration } from "@/lib/format";
+import { openExternalUrl, saveTextExport } from "@/lib/runtime";
 import type { MessageKey } from "@/lib/i18n/messages";
 import { useI18n } from "@/lib/i18n/provider";
 import {
@@ -53,6 +54,7 @@ export function EpisodeWorkspace({ episodeId }: { episodeId: string }) {
   const [error, setError] = useState<unknown | null>(null);
   const [pollWarning, setPollWarning] = useState<unknown | null>(null);
   const [playbackError, setPlaybackError] = useState<WorkspaceError | null>(null);
+  const [actionError, setActionError] = useState<WorkspaceError | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const latestJob = useRef<Job | null>(null);
   const playbackExpiresAt = useRef<string | null>(null);
@@ -314,6 +316,25 @@ export function EpisodeWorkspace({ episodeId }: { episodeId: string }) {
     void renewPlayback({ resume: true }).catch(() => undefined);
   }
 
+  async function exportEpisode(format: "markdown" | "json" | "srt" | "vtt") {
+    setActionError(null);
+    try {
+      const { contents, filename } = await api.downloadExport(episodeId, format);
+      await saveTextExport(filename, contents);
+    } catch (cause) {
+      setActionError({ cause, fallback: "errors.export" });
+    }
+  }
+
+  async function openSource(url: string) {
+    setActionError(null);
+    try {
+      await openExternalUrl(url);
+    } catch (cause) {
+      setActionError({ cause, fallback: "errors.externalOpen" });
+    }
+  }
+
   if (loading) return <EpisodeSkeleton />;
   if (error || !episode) {
     return (
@@ -323,7 +344,7 @@ export function EpisodeWorkspace({ episodeId }: { episodeId: string }) {
           <span>
             {error ? localizeError(error, t, "errors.episodeOpen") : t("workspace.episodeNotFound")}
           </span>
-          <Link href="/">{t("workspace.backToLibrary")}</Link>
+          <Link to="/">{t("workspace.backToLibrary")}</Link>
         </div>
       </div>
     );
@@ -334,7 +355,7 @@ export function EpisodeWorkspace({ episodeId }: { episodeId: string }) {
   return (
     <div className="page episodePage">
       <header className="episodeHeader">
-        <Link className="backLink" href="/">
+        <Link className="backLink" to="/">
           <ChevronLeftIcon size={17} /> {t("workspace.library")}
         </Link>
         <div className="episodeHero">
@@ -356,9 +377,9 @@ export function EpisodeWorkspace({ episodeId }: { episodeId: string }) {
               <span>{formatDuration(episode.duration_ms)}</span>
               {episode.language ? <span>{episode.language.toUpperCase()}</span> : null}
               {episode.canonical_url ? (
-                <a href={episode.canonical_url} rel="noreferrer" target="_blank">
+                <button onClick={() => void openSource(episode.canonical_url!)} type="button">
                   {t("workspace.source")} <ExternalIcon size={14} />
-                </a>
+                </button>
               ) : null}
             </div>
           </div>
@@ -391,17 +412,27 @@ export function EpisodeWorkspace({ episodeId }: { episodeId: string }) {
             <div className="exportMenu">
               <span>{t("workspace.export")}</span>
               {(["markdown", "json", "srt", "vtt"] as const).map((format) => (
-                <a
-                  href={`${API_BASE_URL}/v1/episodes/${episode.id}/exports/${format}`}
+                <button
                   key={format}
+                  onClick={() => void exportEpisode(format)}
+                  type="button"
                 >
                   <DownloadIcon size={14} /> {format.toUpperCase()}
-                </a>
+                </button>
               ))}
             </div>
           </div>
         ) : null}
       </header>
+
+      {actionError ? (
+        <div className="notice errorNotice workspaceActionError" role="alert">
+          <span>{localizeError(actionError.cause, t, actionError.fallback)}</span>
+          <button onClick={() => setActionError(null)} type="button">
+            {t("common.dismiss")}
+          </button>
+        </div>
+      ) : null}
 
       {pollWarning ? (
         <div className="notice warningNotice workspacePollWarning" role="status">

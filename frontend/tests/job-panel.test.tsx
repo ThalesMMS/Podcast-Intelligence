@@ -43,3 +43,57 @@ describe("job panel transcription label", () => {
     expect(markup).not.toContain("diariz");
   });
 });
+
+describe("job panel failure guidance", () => {
+  it("explains how to recover when an embedding model rejects dimensions", () => {
+    const markup = renderWithLocale(
+      <JobPanel
+        job={{
+          ...job,
+          status: "failed",
+          current_step: "index",
+          error_code: "400",
+          error_message:
+            "Model 'qwen3-embedding:8b' does not support Matryoshka embeddings; dimensions must be unset (received dimensions=4096).",
+        }}
+      />,
+    );
+
+    expect(markup).toContain("Embedding request rejected");
+    expect(markup).toContain("Turn off");
+    expect(markup).toContain("Send the dimensions parameter to the embedding endpoint");
+  });
+
+  it("explains how to recover from malformed Responses API JSON", () => {
+    const markup = renderWithLocale(
+      <JobPanel
+        job={{
+          ...job,
+          status: "failed",
+          current_step: "summarize",
+          error_code: "pipeline_failed",
+          error_message:
+            'Invalid JSON: key must be a string at line 1 column 2 [type=json_invalid, input_value=\'{{"title":"Summary"}\']',
+        }}
+      />,
+    );
+
+    expect(markup).toContain("Structured summary output was invalid");
+    expect(markup).toContain("Select Chat Completions under Structured-output API");
+  });
+
+  it("shows the technical message for an unclassified failure", () => {
+    const markup = renderWithLocale(
+      <JobPanel
+        job={{
+          ...job,
+          status: "failed",
+          error_code: "pipeline_failed",
+          error_message: "Connection timed out after 120 seconds",
+        }}
+      />,
+    );
+
+    expect(markup).toContain("Connection timed out after 120 seconds");
+  });
+});

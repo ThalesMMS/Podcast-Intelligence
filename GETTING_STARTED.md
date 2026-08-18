@@ -1,235 +1,270 @@
 # Getting started
 
-This guide starts Podcast Intelligence with the credential-free demo profile.
-It also explains where to configure an optional real AI provider without
-assuming a particular private network, gateway, or model catalog.
+This guide covers the native desktop build first and the Docker/server mode
+second. The default Demo profile requires no API key.
 
-## 1. Requirements
+## 1. Choose a mode
+
+Use **desktop mode** when one person should install and run the application on a
+Mac or Windows PC without PostgreSQL, Redis, MinIO, Docker, or a separately
+managed web server.
+
+Use **server mode** when multiple processes, external clients, PostgreSQL
+search, object storage, OIDC, or network access are required.
+
+## 2. Build the macOS desktop application
 
 Install:
 
-- Git;
-- Docker Engine or Docker Desktop with the Compose v2 plugin;
-- Python 3 for the host-side REST smoke script.
-
-On macOS, Colima can provide the Docker engine without Docker Desktop. One
-Homebrew setup is:
-
 ```bash
-brew install docker colima docker-compose docker-buildx
-mkdir -p "${HOME}/.docker/cli-plugins"
-ln -sfn "$(brew --prefix)/lib/docker/cli-plugins/docker-compose" \
-  "${HOME}/.docker/cli-plugins/docker-compose"
-ln -sfn "$(brew --prefix)/lib/docker/cli-plugins/docker-buildx" \
-  "${HOME}/.docker/cli-plugins/docker-buildx"
-colima start --cpu 4 --memory 8 --disk 60
+xcode-select --install
+brew install python@3.12 uv node rustup-init
+rustup-init -y
+source "$HOME/.cargo/env"
 ```
 
-Colima keeps this machine configuration for later starts. Use `colima start`
-after a restart and `colima stop` when the local Docker engine is not needed.
-
-Confirm that both the daemon and Compose are available:
+Node.js 22 is recommended. Confirm the tools:
 
 ```bash
-git --version
-docker version
-docker compose version
-docker buildx version
+python3.12 --version
+uv --version
+node --version
+npm --version
+rustc --version
+cargo --version
 ```
 
-The application Python runtime, Node.js, FFmpeg, PostgreSQL, Redis, and MinIO
-are included in the development containers.
-
-## 2. Clone and configure
+From the repository root:
 
 ```bash
-git clone https://github.com/ThalesMMS/Podcast-Intelligence-dev.git
-cd Podcast-Intelligence-dev
-cp .env.example .env
+./scripts/build-desktop.sh
 ```
 
-The default `.env.example` uses `AI_PROFILE=demo` and requires no external
-credentials. The `.env` file is ignored by Git and must never be committed.
+The script performs these operations:
 
-Validate the expanded Compose configuration before building:
+1. resolves the native Rust target;
+2. downloads pinned FFmpeg and FFprobe assets for that target;
+3. records their SHA-256 values and upstream metadata;
+4. creates the Python 3.12 environment;
+5. bundles the FastAPI engine with PyInstaller;
+6. stages all external binaries using Tauri's target-suffixed naming;
+7. installs frontend dependencies;
+8. builds the native Tauri bundle.
+
+Open the `.app` or `.dmg` generated under:
+
+```text
+frontend/src-tauri/target/<target>/release/bundle/
+```
+
+Unsigned local builds may require Control-click → Open on first launch. For
+normal distribution, sign and notarize the application instead of asking users
+to bypass Gatekeeper.
+
+## 3. Build the Windows desktop application
+
+Install:
+
+- Python 3.12 x64;
+- uv;
+- Node.js 22 x64;
+- Rust using the `stable-x86_64-pc-windows-msvc` toolchain;
+- Visual Studio 2022 Build Tools with Desktop development with C++.
+
+In PowerShell from the repository root:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\build-desktop.ps1
+```
+
+Installers are generated under:
+
+```text
+frontend\src-tauri\target\x86_64-pc-windows-msvc\release\bundle\
+```
+
+## 4. Build all supported targets in GitHub Actions
+
+Open **Actions → Build desktop installers → Run workflow**, or push a version
+tag:
 
 ```bash
-docker compose config --quiet
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
-## 3. Start the development stack
+Download the three workflow artifacts after completion. Builds are native:
+macOS runners produce macOS bundles and the Windows runner produces Windows
+installers. The repository does not claim that a Windows installer can be
+reliably produced from macOS, or vice versa.
 
-```bash
-docker compose up -d --build
-docker compose ps
+## 5. First desktop launch
+
+The Tauri host starts the packaged engine on a random `127.0.0.1` port and
+passes the webview a per-launch token. Startup can take longer on the first run
+because the packaged Python runtime initializes and SQLite creates its schema.
+
+The app opens in Demo mode. To use a real provider:
+
+1. open **Settings**;
+2. select **OpenAI-compatible** or **Custom**;
+3. enter the base URL when using a gateway;
+4. enter a shared key or provider-specific keys;
+5. confirm model names and embedding dimension;
+6. save.
+
+The engine restarts, but the database and media library remain in place.
+
+### OpenAI-compatible profile
+
+Typical fields:
+
+```text
+AI profile: OpenAI-compatible
+Base URL: empty for the default OpenAI endpoint, otherwise gateway /v1 URL
+Shared API key: provider key
+Transcription model: provider diarized/audio model
+Embedding model: provider embedding model
+LLM model: provider structured-output model
+LLM API: Responses or Chat Completions
+Embedding dimension: exact model dimension
 ```
 
-The API runs database migrations and initializes the local workspace during
-startup. Check readiness:
+Separate transcription, embedding, and LLM keys override the shared key.
 
-```bash
-curl -fsS http://localhost:8000/health/ready
-curl -fsS http://localhost:8000/v1/providers
-```
+### Custom profile
 
-The expected readiness response reports `database`, `object_store`, and
-`redis` as `ok`.
+Custom mode allows, for example:
 
-Local services:
+- WebSocket STT + OpenAI-compatible embeddings + OpenAI-compatible LLM;
+- OpenAI transcription + deterministic demo embeddings + local Codex CLI;
+- demo transcription for interface testing with a real LLM disabled.
 
-- application: <http://localhost:3000>;
-- REST API and OpenAPI: <http://localhost:8000/docs>;
-- MCP: <http://localhost:8001/mcp>;
-- MinIO console: <http://localhost:9001>.
+The provider capabilities endpoint and settings validation expose configuration
+errors rather than silently substituting another provider.
 
-Compose binds these development ports to `127.0.0.1` by default. To make a
-service reachable from another machine, set `HOST_BIND_ADDRESS` deliberately
-and first replace the development credentials and authentication mode. Never
-bind the default configuration to an untrusted network.
-
-## 4. Create and inspect demo data
-
-Create a complete demo episode:
-
-```bash
-docker compose run --rm api python -m podcast_intelligence.cli seed-demo
-```
-
-Open <http://localhost:3000>, select the demo episode, and inspect its summary,
-transcript, speakers, and grounded chat.
-
-The demo transcript is synthetic and explicitly marked. It validates the
-application flow but does not represent speech from an imported audio file.
-
-Run the REST smoke checks:
-
-```bash
-./scripts/smoke_test.sh
-```
-
-## 5. Import content
+## 6. Import content
 
 The interface accepts:
 
-- a local audio upload;
-- a direct media URL;
-- an RSS feed or episode URL;
-- an Apple Podcasts episode URL;
-- a Spotify episode URL when it can be matched to a public RSS enclosure.
+- local audio or video upload;
+- direct media URL;
+- RSS feed or episode URL;
+- Apple Podcasts episode URL;
+- Spotify episode URL, when it can be resolved to an authorized public RSS
+  enclosure.
 
-Use content you are authorized to process. The project does not bypass DRM,
-subscriptions, or access controls.
+Use content you are authorized to process. Catalog resolution does not bypass
+DRM, subscriptions, login walls, or access controls.
 
-With the demo profile, importing a real audio file still produces synthetic
-text. Configure a real transcription provider before evaluating transcript
-accuracy.
+A processing job proceeds through:
 
-## 6. Configure an optional AI provider
-
-The built-in OpenAI profile uses one shared credential:
-
-```dotenv
-AI_PROFILE=openai
-OPENAI_API_KEY=replace-with-a-secret-from-your-password-manager
+```text
+resolve_source
+  → acquire_media
+  → normalize_audio
+  → transcribe
+  → index
+  → summarize
+  → finalize
 ```
 
-OpenAI-compatible gateways can use separate credentials and a custom base URL.
-The following endpoints use the reserved `example.com` domain and must be
-replaced with values from the provider:
+The local executor stores job state in SQLite. Closing the application between
+steps is safe; running steps are returned to pending and resumed on the next
+launch. Cancellation is cooperative and cannot forcibly interrupt a provider
+request already in progress.
 
-```dotenv
-AI_PROFILE=custom
-TRANSCRIPTION_PROVIDER=streaming_ws
-EMBEDDING_PROVIDER=openai
-LLM_PROVIDER=openai
+## 7. Use the episode workspace
 
-OPENAI_BASE_URL=https://ai.example.com/v1
-OPENAI_EMBEDDING_API_KEY=replace-with-your-embedding-key
-OPENAI_LLM_API_KEY=replace-with-your-llm-key
-OPENAI_EMBEDDING_MODEL=replace-with-your-embedding-model
-OPENAI_LLM_MODEL=replace-with-your-llm-model
+For a ready episode, the application provides:
 
-STREAMING_STT_URL=wss://ai.example.com/v1/audio/transcriptions/stream
-STREAMING_STT_API_KEY=replace-with-your-transcription-key
-STREAMING_STT_MODEL=replace-with-your-transcription-model
-```
+- playback with expiring signed local URLs;
+- summary chapters and takeaways linked to timestamps;
+- paginated transcript search;
+- speaker renaming;
+- grounded chat with literal transcript citations;
+- Markdown, JSON, SRT, and VTT exports.
 
-Provider-specific limits determine whether you must also change embedding
-dimensions, batch sizes, transcription chunking, or the LLM API mode. See
-[AI providers](docs/providers.md) and the comments in [`.env.example`](.env.example)
-before importing long media.
+Exports are fetched with the desktop session token and written only after a
+native save destination is selected.
 
-After changing provider configuration, recreate the affected services:
+## 8. Back up or move a desktop library
+
+Close the application and copy its complete application-data directory. It
+contains the SQLite database and the corresponding object files; copying only
+one of them creates an incomplete backup.
+
+The runtime-selected path follows the operating system's standard application
+data location for `com.thalesmms.podcast-intelligence`. Common locations are
+under:
+
+- macOS: `~/Library/Application Support/`;
+- Windows: `%APPDATA%` or the Tauri-resolved application data directory.
+
+Do not depend on a hard-coded path; use the runtime path reported by the app or
+inspect Tauri's resolved data directory.
+
+Provider credentials are in `settings.json`. Treat backups as sensitive.
+
+## 9. Recover from invalid settings
+
+If a bad endpoint, unsupported model, or missing key prevents engine startup,
+the startup screen offers two safe actions:
+
+- retry after correcting an environmental issue;
+- reset provider settings to Demo and restart.
+
+The reset changes provider configuration only. It does not delete the database,
+media, transcripts, summaries, or queued jobs.
+
+## 10. Run server mode with Docker
+
+Requirements:
+
+- Docker Engine or Docker Desktop;
+- Compose v2;
+- Python 3 on the host only for the smoke script.
 
 ```bash
-docker compose up -d --build --force-recreate api worker beat mcp
-curl -fsS http://localhost:8000/v1/providers
+cp .env.example .env
+docker compose config --quiet
+docker compose up -d --build
 ```
 
-The provider response must match the intended transcription, embedding, and LLM
-configuration before processing valuable or long-running content.
+Endpoints:
 
-## 7. Development checks
+- application: `http://localhost:3000`;
+- REST/OpenAPI: `http://localhost:8000/docs`;
+- MCP: `http://localhost:8001/mcp`;
+- MinIO console: `http://localhost:9001`.
 
-The local quality gates require Python 3.12 with
-[uv](https://docs.astral.sh/uv/) and a supported Node.js version:
+Create a complete synthetic demo episode:
+
+```bash
+docker compose run --rm api python -m podcast_intelligence.cli seed-demo
+./scripts/smoke_test.sh
+```
+
+Do not run `docker compose down -v` when PostgreSQL or MinIO volumes contain data
+that must be retained.
+
+## 11. Development checks
 
 ```bash
 make check
+make desktop-check
 ```
 
-`make check` runs formatting verification, lint, type checks, and both test
-suites. Run it before pushing because GitHub-hosted CI is intentionally not
-configured for this repository.
+`make check` runs Python and frontend formatting, linting, typing, and tests.
+`make desktop-check` adds Rust formatting/checks and desktop-specific targeted
+tests. Native packaging is intentionally separate because each target requires
+its own operating system.
 
-The integrated smoke check additionally requires the Compose stack:
+More detail:
 
-```bash
-make smoke
-```
-
-## 8. Everyday operations
-
-```bash
-# Start or rebuild
-docker compose up -d --build
-
-# View state
-docker compose ps
-
-# Follow application logs
-docker compose logs -f --tail=200 api worker
-
-# Stop without deleting persistent data
-docker compose down --remove-orphans
-```
-
-Do not use `docker compose down -v` when you need to preserve local episodes,
-database rows, or stored audio. The `-v` option removes the project volumes.
-
-## 9. Moving to another computer
-
-A Git clone contains code, migrations, and documentation. It does not contain:
-
-- `.env` or provider credentials;
-- PostgreSQL data;
-- audio stored in MinIO;
-- Redis data;
-- imported episodes, transcripts, embeddings, or summaries.
-
-For a new installation, configure a new `.env` and import the content again.
-To preserve an existing installation, back up and restore PostgreSQL and MinIO
-separately.
-
-## 10. Production boundary
-
-The Compose stack is for local development. Before deploying the service on a
-public or shared network, follow [Deployment and operations](docs/deployment.md),
-[Security](SECURITY.md), and [Known limitations](docs/known-limitations.md).
-
-Additional documentation:
-
-- [README](README.md)
 - [Architecture](docs/architecture.md)
-- [Data model](docs/data-model.md)
-- [MCP and Codex](docs/mcp-and-codex.md)
+- [Desktop packaging](docs/desktop-packaging.md)
+- [Deployment](docs/deployment.md)
+- [Security](SECURITY.md)
+- [Known limitations](docs/known-limitations.md)

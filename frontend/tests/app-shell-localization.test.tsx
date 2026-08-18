@@ -1,9 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { AppShell } from "../components/app-shell";
 import { renderWithLocale } from "./i18n-test-utils";
-
-vi.mock("next/navigation", () => ({ usePathname: () => "/" }));
 
 describe("application shell localization", () => {
   it("renders English navigation and both locale choices", () => {

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import time
 import uuid
 from _thread import LockType
 from collections.abc import Generator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
+from pathlib import Path
 from threading import Lock
+from typing import BinaryIO
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -20,12 +24,33 @@ class Base(DeclarativeBase):
 
 
 settings = get_settings()
+_is_sqlite = settings.database_url.startswith("sqlite")
+_connect_args: dict[str, object] = {}
+if _is_sqlite:
+    _connect_args = {"check_same_thread": False, "timeout": 30}
+
 engine = create_engine(
     settings.database_url,
     pool_pre_ping=True,
     future=True,
+    connect_args=_connect_args,
 )
 SessionLocal = sessionmaker(bind=engine, class_=Session, expire_on_commit=False, autoflush=False)
+
+
+if _is_sqlite:
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection: object, _: object) -> None:
+        cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
+        try:
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA busy_timeout=30000")
+        finally:
+            cursor.close()
+
 
 _active_local_jobs: set[uuid.UUID] = set()
 _active_local_jobs_guard = Lock()
@@ -39,6 +64,63 @@ class _LocalSummaryLock:
 
 _active_local_summaries: dict[uuid.UUID, _LocalSummaryLock] = {}
 _active_local_summaries_guard = Lock()
+
+
+def _acquire_desktop_named_file_lock(name: str) -> BinaryIO | None:
+    if not settings.desktop_mode:
+        return None
+    lock_dir = Path(settings.desktop_data_dir) / "locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    handle = (lock_dir / f"{name}.lock").open("a+b")
+    if handle.seek(0, os.SEEK_END) == 0:
+        handle.write(b"0")
+        handle.flush()
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        while True:
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError:
+                time.sleep(0.05)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    return handle
+
+
+def _release_desktop_file_lock(handle: BinaryIO | None) -> None:
+    if handle is None:
+        return
+    try:
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+def create_database_schema() -> None:
+    """Create the local schema for a fresh desktop database.
+
+    Server deployments continue to use Alembic. Desktop builds deliberately use
+    SQLAlchemy metadata because the bundled SQLite database is private to the
+    installed application and starts empty on first launch.
+    """
+
+    # Importing models registers every table on Base.metadata.
+    from podcast_intelligence import models as _models  # noqa: F401
+
+    Base.metadata.create_all(bind=engine)
 
 
 def _job_lock_key(job_id: uuid.UUID) -> int:
@@ -58,13 +140,11 @@ def summary_generation_transaction(
     session: Session,
     transcript_id: uuid.UUID,
 ) -> Generator[None, None, None]:
-    """Serialize one transcript's summary generation and own its transaction.
+    """Serialize one transcript's summary generation and own its transaction."""
 
-    The supplied session must have no unrelated pending or dirty state because
-    this context commits or rolls back the caller's entire transaction.
-    """
     local_entry = None
     local_acquired = False
+    file_lock: BinaryIO | None = None
     try:
         if session.get_bind().dialect.name == "postgresql":
             session.execute(
@@ -79,12 +159,14 @@ def summary_generation_transaction(
                 )
                 local_entry.users += 1
             local_acquired = local_entry.lock.acquire()
+            file_lock = _acquire_desktop_named_file_lock(f"summary-{transcript_id}")
         yield
         session.commit()
     except BaseException:
         session.rollback()
         raise
     finally:
+        _release_desktop_file_lock(file_lock)
         if local_entry is not None:
             if local_acquired:
                 local_entry.lock.release()
@@ -97,6 +179,7 @@ def summary_generation_transaction(
 @contextmanager
 def job_execution_session(job_id: uuid.UUID) -> Generator[Session | None, None, None]:
     """Yield a session only when this process owns the job execution lock."""
+
     if engine.dialect.name != "postgresql":
         with _active_local_jobs_guard:
             acquired = job_id not in _active_local_jobs
@@ -105,10 +188,13 @@ def job_execution_session(job_id: uuid.UUID) -> Generator[Session | None, None, 
         if not acquired:
             yield None
             return
+        job_file_lock: BinaryIO | None = None
         try:
+            job_file_lock = _acquire_desktop_named_file_lock(f"job-{job_id}")
             with SessionLocal() as session:
                 yield session
         finally:
+            _release_desktop_file_lock(job_file_lock)
             with _active_local_jobs_guard:
                 _active_local_jobs.discard(job_id)
         return

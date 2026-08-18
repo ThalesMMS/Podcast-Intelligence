@@ -2,118 +2,162 @@
 
 Validation date: August 17, 2026.
 
-## Environment
+## Scope
 
-- Python 3.12.13;
-- uv 0.11.32;
-- Node.js 22.22.0;
-- npm 10.9.4;
-- Docker client 29.7.2 and server 29.5.2 on Linux/ARM64;
-- Colima 0.10.3 with 4 CPUs, 8 GiB memory, and a 60 GiB disk;
-- Docker Compose 5.4.0;
-- Docker Buildx 0.36.1 with BuildKit 0.30.0.
+This report covers the migration from the original multi-container web service
+to the desktop architecture in this repository: a Tauri host, a React/Vite
+interface, and a PyInstaller-packaged Python engine using SQLite, local files,
+and an in-process durable job executor.
 
-Dependencies were synchronized from `backend/uv.lock` with
-`uv sync --frozen --extra dev` and from `frontend/package-lock.json` with
-`npm ci`.
+The objective of the validation was to establish that the migrated source is
+internally coherent and that its principal desktop workflow works end to end in
+the available Linux environment. It was not possible to produce or execute the
+native Windows and macOS bundles in this environment.
+
+## Available validation environment
+
+- Linux x86-64 container;
+- Python 3.13.5;
+- pre-provisioned Python environment at `/opt/pyvenv` containing the principal
+  runtime packages used by the engine;
+- Node.js 22.16.0;
+- npm 10.9.2;
+- TypeScript 5.8.3 available globally;
+- FFmpeg 7.1.5;
+- Go 1.23.2, present but not used by the selected Tauri architecture.
+
+The following were unavailable:
+
+- Rust and Cargo;
+- Docker;
+- Windows or macOS build hosts;
+- working access to npm, PyPI, Rust, or release-download registries.
+
+Because package registries were unavailable, this validation did not claim a
+fresh dependency installation. A small set of temporary import stubs was used
+outside the repository only where the pre-provisioned Python environment lacked
+optional server-only packages such as pgvector. No stub, credential, generated
+database, test audio, or validation-only dependency is included in the source
+archive.
 
 ## Checks completed successfully
 
-### Backend
+### Desktop engine and backend
 
-- Ruff lint: passed.
-- Ruff format check: 87 files already formatted.
-- mypy strict type check: no issues in 54 source files.
-- pytest: 126 tests passed and 2 integration tests skipped.
-- pip-audit: no known vulnerabilities in installed third-party packages; the
-  local `podcast-intelligence` package was skipped because it is not on PyPI.
+- Python bytecode compilation completed for all package, test, build, and
+  support scripts.
+- JSON-backed vector storage compiled for SQLite while retaining the
+  PostgreSQL/pgvector type on the server profile.
+- Local object-store tests passed, including path confinement, signed upload and
+  download tokens, expiry, size validation, and MIME validation.
+- Settings tests passed for desktop defaults, profile expansion, local paths,
+  and provider validation.
+- Retrieval tests passed for the SQLite implementation, including lexical
+  ranking, cosine similarity, model isolation, workspace isolation, episode
+  filtering, weighting, and result limits.
+- SQLite startup configuration was exercised with foreign-key enforcement, WAL,
+  busy timeout, and cross-process job locking.
+- The local worker recovered durable dispatch rows and completed the existing
+  idempotent seven-step pipeline without Redis or Celery.
 
-The skipped tests require external services:
+### End-to-end desktop workflow
 
-- S3-compatible endpoint and credentials for playback integration;
-- `TEST_POSTGRES_URL` for the PostgreSQL planner integration.
+A real WAV fixture was generated locally and processed through the running
+FastAPI desktop engine. The following operations completed successfully:
 
-### Frontend
+1. engine startup on a random loopback port;
+2. authenticated health check;
+3. signed local upload;
+4. episode and durable job creation;
+5. source resolution and media acquisition;
+6. FFmpeg normalization to processing WAV and M4A playback media;
+7. demo transcription;
+8. speaker-aware chunking and SQLite indexing;
+9. structured summary creation;
+10. hybrid search;
+11. grounded chat with materialized transcript citations;
+12. JSON, Markdown, SRT, and VTT export;
+13. graceful shutdown.
 
-- Prettier format check: passed.
-- ESLint: passed.
-- Next.js route type generation and TypeScript check: passed.
-- Vitest: 21 test files passed, with 102 tests passed.
-- Next.js production build: passed.
-- `npm audit --audit-level=low`: zero vulnerabilities.
+Every pipeline step ended in `completed`:
 
-The dependency locks include the first patched releases for the advisories
-identified during the public-repository review:
-
-- `brace-expansion` 5.0.9;
-- `js-yaml` 4.3.1;
-- `nanoid` 3.3.18;
-- `cryptography` 50.0.0.
-
-### Repository checks
-
-- `scripts/smoke_test.sh` passed `bash -n`.
-- `docker-compose.yml` and `.github/dependabot.yml` parsed as YAML.
-- The aggregate local `make check` target covers format checks, lint, typing,
-  and both test suites without relying on GitHub-hosted CI.
-- The deterministic source archive command passed a dry run.
-- GitHub-hosted CI is intentionally not configured. Dependabot remains
-  configured for dependency monitoring.
-
-### Docker integration
-
-The local Docker engine was installed and configured with Colima. These checks
-completed successfully:
-
-- `docker compose config --quiet`;
-- Buildx builds for the API, worker, beat, MCP, and frontend images;
-- `docker compose up -d --wait --wait-timeout 240`;
-- migrations and health checks for PostgreSQL, Redis, MinIO, and API;
-- running-state checks for worker, beat, MCP, and frontend, plus successful
-  completion of the one-shot MinIO initializer;
-- inspection of the expanded Compose configuration confirming that every
-  published development port binds to `127.0.0.1` by default;
-- demo seeding, which returned episode
-  `00000000-0000-0000-0000-000000000101`;
-- the integrated REST smoke test for liveness, readiness, and provider
-  discovery;
-- frontend HTTP rendering with the title `Podcast Intelligence`.
-
-The smoke script initially exposed a macOS portability defect because it
-assumed the executable name `python`. It now selects `python3` first, falls back
-to `python`, and exits with a clear error if neither is available. The corrected
-script passed `bash -n` and the integrated smoke test.
-
-The verified local flow is:
-
-```bash
-cp .env.example .env
-docker compose config --quiet
-docker compose up -d --build
-docker compose run --rm api python -m podcast_intelligence.cli seed-demo
-./scripts/smoke_test.sh
-docker compose ps
+```text
+resolve_source
+acquire_media
+normalize_audio
+transcribe
+index
+summarize
+finalize
 ```
 
-Do not use `docker compose down -v` when the local volumes contain data that
-must be preserved.
+A second engine process was then started against the same application-data
+directory. The episode remained available with status `ready`, confirming
+persistence across restarts. Playback was requested with
+`Range: bytes=0-127`; the local file endpoint returned HTTP `206` and exactly
+128 bytes, which verifies byte-range support required for seekable audio.
 
-## External-provider checks not run
+### Frontend and repository structure
 
-No real calls were made to OpenAI-compatible APIs, WebSocket transcription
-providers, Spotify, Apple Podcasts, or external feeds. Those checks require
-user-controlled credentials, provider access, and content authorized for
-processing.
+- Every TypeScript and TSX source file passed a TypeScript transpilation syntax
+  pass: 54 files.
+- The local frontend import graph resolved successfully: 56 files.
+- The English and Brazilian Portuguese catalogs have matching sets of 232 keys.
+- Next.js runtime imports and build commands were removed from application
+  source; routing now uses React Router and the build entry point is Vite.
+- JSON configuration files parsed successfully, including `package.json`,
+  `tsconfig.json`, Tauri configuration, and Tauri capabilities.
+- YAML parsed successfully for Docker Compose and the native desktop GitHub
+  Actions workflow.
+- Shell scripts passed `bash -n`.
+- The PowerShell build script passed a structural delimiter check.
+- `git diff --check` found no whitespace errors.
+- The static Vite production-server helper was exercised for index delivery,
+  SPA fallback, `HEAD`, immutable asset caching, and rejection of unsupported
+  methods.
 
-MCP testing inside ChatGPT also remains environment-specific because it
-requires a reachable HTTPS endpoint and authentication appropriate to the
-deployment.
+### Packaging logic
 
-## Scope of this report
+- The source-packaging script creates a deterministic archive layout.
+- It excludes virtual environments, package caches, build output, databases,
+  installers, sidecar binaries, macOS metadata, and validation artifacts.
+- It generates `FILE_MANIFEST.sha256` inside the archive and a separate SHA-256
+  file for the ZIP itself.
+- The FFmpeg acquisition script pins a release, selects the platform-specific
+  archive, computes SHA-256, and verifies a published checksum when one is
+  supplied by the release.
 
-This report validates the local code gates and records the remaining
-environment-dependent checks. It is not a production-readiness, threat-model,
-privacy, or penetration-test certification. Review [Security](SECURITY.md),
-[Deployment and operations](docs/deployment.md), and
-[Known limitations](docs/known-limitations.md) before deploying the service on
-a public or shared network.
+## Checks not run in this environment
+
+The following require dependency registries, native target hosts, credentials,
+or external services and therefore were not represented as completed:
+
+- `npm install` and a Vite production bundle using freshly installed project
+  dependencies;
+- the complete Vitest, ESLint, Prettier, and TypeScript project checks against a
+  newly installed `node_modules` tree;
+- `cargo fmt`, `cargo check`, and `tauri build`;
+- a complete PyInstaller sidecar build from a freshly synchronized Python
+  environment;
+- creation or launch of `.app`, `.dmg`, `.exe`, `.msi`, or NSIS artifacts;
+- Apple code signing, Windows Authenticode signing, or Apple notarization;
+- real OpenAI-compatible transcription, embedding, or language-model requests;
+- real streaming-WebSocket transcription;
+- Spotify credential flow, Apple Podcasts resolution, arbitrary public RSS
+  feeds, and remote-media downloads;
+- Docker Compose expansion, image build, or runtime integration;
+- connection of the MCP endpoint from ChatGPT or Codex.
+
+The repository includes native Windows and macOS build scripts and a GitHub
+Actions matrix so these checks can be completed on their respective operating
+systems. The first trusted, connected build should also regenerate and commit
+the npm and uv lock data after installing the migrated dependency graph.
+
+## Interpretation
+
+The available evidence verifies the source migration, SQLite/local-storage
+substitutions, internal job execution, desktop HTTP contracts, media processing,
+persistence, range playback, and principal product workflow. It does not certify
+native installer behavior, production security, provider compatibility,
+notarization, or public deployment. Those remain release gates on real macOS and
+Windows hosts.

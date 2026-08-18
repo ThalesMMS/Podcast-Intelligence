@@ -228,3 +228,16 @@ export function DownloadIcon(props: IconProps) {
     </IconBase>
   );
 }
+export function SettingsIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.7" />
+      <path
+        d="M19.4 13.5a7.9 7.9 0 000-3l2-1.7-2-3.4-2.8 1.1a8.3 8.3 0 00-2.6-1.5L13.6 2h-4L9.2 5a8.3 8.3 0 00-2.6 1.5L3.8 5.4l-2 3.4 2 1.7a7.9 7.9 0 000 3l-2 1.7 2 3.4 2.8-1.1A8.3 8.3 0 009.2 19l.4 3h4l.4-3a8.3 8.3 0 002.6-1.5l2.8 1.1 2-3.4z"
+        stroke="currentColor"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+      />
+    </IconBase>
+  );
+}

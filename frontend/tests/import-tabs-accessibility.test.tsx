@@ -2,6 +2,7 @@
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Dashboard } from "../components/dashboard";
@@ -13,10 +14,6 @@ import { renderWithLocale } from "./i18n-test-utils";
 
 const apiMocks = vi.hoisted(() => ({
   createUrlImport: vi.fn(),
-}));
-
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
 }));
 
 vi.mock("../lib/api", async (importOriginal) => {
@@ -61,10 +58,12 @@ async function renderInteractiveDashboard() {
   activeRoot = createRoot(container);
   await act(async () =>
     activeRoot?.render(
-      <LocaleProvider initialLocale="en-US">
-        <LocaleToggle />
-        <Dashboard />
-      </LocaleProvider>,
+      <MemoryRouter>
+        <LocaleProvider initialLocale="en-US">
+          <LocaleToggle />
+          <Dashboard />
+        </LocaleProvider>
+      </MemoryRouter>,
     ),
   );
   return container;
