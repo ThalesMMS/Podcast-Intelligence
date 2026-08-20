@@ -1,4 +1,4 @@
-FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS builder
+FROM node:26-alpine@sha256:aadf416b2cdce311a8811ba3f0608a61b77dbf997500e2eafe781b51f6a0b019 AS builder
 WORKDIR /app
 ARG VITE_API_URL=http://localhost:8000
 ARG VITE_MCP_URL=http://localhost:8001/mcp
@@ -10,7 +10,7 @@ RUN npm install --no-audit --no-fund
 COPY . .
 RUN npm run build
 
-FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS runner
+FROM node:26-alpine@sha256:aadf416b2cdce311a8811ba3f0608a61b77dbf997500e2eafe781b51f6a0b019 AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000 \
