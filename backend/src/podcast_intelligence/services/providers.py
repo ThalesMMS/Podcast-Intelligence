@@ -111,10 +111,9 @@ def build_registry(settings: Settings) -> ProviderRegistry:
         )
         transcriber: Transcriber = OpenAITranscriber(settings)
     elif settings.transcription_provider == "streaming_ws":
-        if not settings.streaming_stt_url or not settings.streaming_stt_api_key:
+        if not settings.streaming_stt_url:
             raise ProviderConfigurationError(
-                "STREAMING_STT_URL and STREAMING_STT_API_KEY are required when "
-                "transcription provider is streaming_ws"
+                "STREAMING_STT_URL is required when transcription provider is streaming_ws"
             )
         transcriber = StreamingWebSocketTranscriber(settings)
     else:

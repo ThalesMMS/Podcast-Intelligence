@@ -49,13 +49,12 @@ faithfulness evaluations.
 
 `TRANSCRIPTION_PROVIDER=streaming_ws` connects to a service that receives an
 initial JSON message, mono 16-bit PCM frames at 16 kHz, and a final `stop`
-message. Configure `STREAMING_STT_URL`, `STREAMING_STT_API_KEY`, and
-`STREAMING_STT_MODEL`. The adapter opens sequential sessions limited by
+message. Configure `STREAMING_STT_URL` and `STREAMING_STT_MODEL`; an API key is
+optional inside a trusted tailnet. The adapter opens sequential sessions limited by
 `STREAMING_STT_BATCH_SECONDS`, preventing inference from exceeding streaming
-gateway heartbeats. Because this contract returns only accumulated text, each
-batch creates one segment with approximate batch boundaries; the adapter
-explicitly declares that it provides neither diarization nor internal
-timestamps.
+gateway heartbeats. When the gateway returns timestamped segments, they are
+preserved; otherwise each batch becomes one segment with approximate bounds.
+The adapter does not claim neural diarization.
 
 ## Published RSS transcripts
 
@@ -71,6 +70,7 @@ With `AI_PROFILE=custom`, configure providers individually:
 ```dotenv
 TRANSCRIPTION_PROVIDER=streaming_ws
 STREAMING_STT_URL=ws://gateway.example/v1/audio/transcriptions/stream
+STREAMING_STT_MODEL=whisper-large-v3-turbo
 EMBEDDING_PROVIDER=openai
 OPENAI_EMBEDDING_BASE_URL=http://gateway.example/v1
 LLM_PROVIDER=openai

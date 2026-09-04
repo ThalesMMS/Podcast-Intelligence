@@ -24,8 +24,6 @@ class StreamingWebSocketTranscriber:
         url = settings.streaming_stt_url
         if not url:
             raise ValueError("STREAMING_STT_URL is required")
-        if not settings.streaming_stt_api_key:
-            raise ValueError("STREAMING_STT_API_KEY is required")
         self.settings = settings
         self.url = url
         self.model_name = settings.streaming_stt_model
@@ -64,7 +62,7 @@ class StreamingWebSocketTranscriber:
         *,
         start_frame: int,
         frame_count: int,
-    ) -> str:
+    ) -> tuple[str, list[dict[str, Any]]]:
         frames_per_message = round(16_000 * self.settings.streaming_stt_frame_seconds)
         async with connect(
             self.url,
@@ -73,18 +71,16 @@ class StreamingWebSocketTranscriber:
             ping_interval=None,
             max_size=None,
         ) as socket:
-            await socket.send(
-                json.dumps(
-                    {
-                        "type": "start",
-                        "apiKey": self.settings.streaming_stt_api_key,
-                        "model": self.model_name,
-                        "language": language,
-                        "format": "pcm_s16le",
-                        "sampleRate": 16_000,
-                    }
-                )
-            )
+            start_message: dict[str, Any] = {
+                "type": "start",
+                "model": self.model_name,
+                "language": language,
+                "format": "pcm_s16le",
+                "sampleRate": 16_000,
+            }
+            if self.settings.streaming_stt_api_key:
+                start_message["apiKey"] = self.settings.streaming_stt_api_key
+            await socket.send(json.dumps(start_message))
             ready = self._event(await socket.recv())
             if ready.get("type") != "ready":
                 raise RuntimeError("Streaming STT did not acknowledge the session")
@@ -104,6 +100,7 @@ class StreamingWebSocketTranscriber:
 
             sender = asyncio.create_task(send_audio())
             final_text: str | None = None
+            final_segments: list[dict[str, Any]] = []
             try:
                 async for raw_message in socket:
                     event = self._event(raw_message)
@@ -113,6 +110,11 @@ class StreamingWebSocketTranscriber:
                     partial = str(event.get("partial") or "")
                     if event.get("done"):
                         final_text = f"{committed}{partial}".strip()
+                        segments = event.get("segments")
+                        if isinstance(segments, list):
+                            final_segments = [
+                                segment for segment in segments if isinstance(segment, dict)
+                            ]
                         break
                 await sender
             finally:
@@ -123,7 +125,7 @@ class StreamingWebSocketTranscriber:
 
             if final_text is None:
                 raise RuntimeError("Streaming STT closed without a final transcript")
-            return final_text
+            return final_text, final_segments
 
     async def _stream_batches(
         self,
@@ -132,18 +134,18 @@ class StreamingWebSocketTranscriber:
         *,
         total_frames: int,
         sample_rate: int,
-    ) -> list[tuple[int, int, str]]:
+    ) -> list[tuple[int, int, str, list[dict[str, Any]]]]:
         batch_frames = round(sample_rate * self.settings.streaming_stt_batch_seconds)
-        batches: list[tuple[int, int, str]] = []
+        batches: list[tuple[int, int, str, list[dict[str, Any]]]] = []
         for start_frame in range(0, total_frames, batch_frames):
             frame_count = min(batch_frames, total_frames - start_frame)
-            text = await self._stream(
+            text, segments = await self._stream(
                 audio_path,
                 language,
                 start_frame=start_frame,
                 frame_count=frame_count,
             )
-            batches.append((start_frame, frame_count, text))
+            batches.append((start_frame, frame_count, text, segments))
         return batches
 
     def transcribe(
@@ -167,31 +169,63 @@ class StreamingWebSocketTranscriber:
             )
         )
         nonempty_batches = [
-            (start_frame, batch_frame_count, batch_text.strip())
-            for start_frame, batch_frame_count, batch_text in batches
+            (start_frame, batch_frame_count, batch_text.strip(), segments)
+            for start_frame, batch_frame_count, batch_text, segments in batches
             if batch_text.strip()
         ]
         if not nonempty_batches:
             raise RuntimeError("Streaming STT returned an empty transcript")
-        text = "\n\n".join(batch_text for _, _, batch_text in nonempty_batches)
-        return TranscriptionResult(
-            text=text,
-            segments=[
+        text = "\n\n".join(batch_text for _, _, batch_text, _ in nonempty_batches)
+        transcript_segments: list[TranscriptSegmentData] = []
+        gateway_timestamps = False
+        for start_frame, batch_frame_count, batch_text, gateway_segments in nonempty_batches:
+            batch_offset_ms = round(start_frame / sample_rate * 1000)
+            usable_segments = [
+                segment
+                for segment in gateway_segments
+                if str(segment.get("text") or "").strip()
+                and isinstance(segment.get("start"), (int, float))
+                and isinstance(segment.get("end"), (int, float))
+            ]
+            if usable_segments:
+                gateway_timestamps = True
+                for segment in usable_segments:
+                    channel = str(segment.get("channel") or "mixed")
+                    transcript_segments.append(
+                        TranscriptSegmentData(
+                            ordinal=len(transcript_segments),
+                            start_ms=batch_offset_ms + round(float(segment["start"]) * 1000),
+                            end_ms=batch_offset_ms + round(float(segment["end"]) * 1000),
+                            text=str(segment["text"]).strip(),
+                            speaker_label=(
+                                channel if channel not in {"mixed", "unknown"}
+                                else "SPEAKER_UNKNOWN"
+                            ),
+                            language=resolved_language,
+                            metadata={
+                                "streaming": True,
+                                "timestamps": "gateway",
+                                "utterance_id": segment.get("utteranceId"),
+                                "revision": segment.get("revision"),
+                                "channel": channel,
+                            },
+                        )
+                    )
+                continue
+            transcript_segments.append(
                 TranscriptSegmentData(
-                    ordinal=ordinal,
-                    start_ms=round(start_frame / sample_rate * 1000),
+                    ordinal=len(transcript_segments),
+                    start_ms=batch_offset_ms,
                     end_ms=round((start_frame + batch_frame_count) / sample_rate * 1000),
                     text=batch_text,
                     speaker_label="SPEAKER_UNKNOWN",
                     language=resolved_language,
                     metadata={"streaming": True, "timestamps": "batch_bounds"},
                 )
-                for ordinal, (
-                    start_frame,
-                    batch_frame_count,
-                    batch_text,
-                ) in enumerate(nonempty_batches)
-            ],
+            )
+        return TranscriptionResult(
+            text=text,
+            segments=transcript_segments,
             language=resolved_language,
             provider=self.provider_name,
             model=self.model_name,
@@ -199,7 +233,7 @@ class StreamingWebSocketTranscriber:
             metadata={
                 "protocol": "pcm_s16le-websocket-v1",
                 "diarization": False,
-                "segment_timestamps": False,
+                "segment_timestamps": gateway_timestamps,
                 "batch_count": len(batches),
                 "batch_seconds": self.settings.streaming_stt_batch_seconds,
             },
@@ -213,7 +247,7 @@ class StreamingWebSocketTranscriber:
             capabilities={
                 "real_transcription": True,
                 "diarization": False,
-                "segment_timestamps": False,
+                "segment_timestamps": True,
                 "streaming": True,
                 "sample_rate": 16_000,
             },

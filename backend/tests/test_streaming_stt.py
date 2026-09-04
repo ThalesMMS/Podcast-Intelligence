@@ -11,8 +11,22 @@ from podcast_intelligence.config import Settings
 
 
 class _Socket:
-    def __init__(self) -> None:
+    def __init__(self, *, with_segments: bool = True) -> None:
         self.sent: list[str | bytes] = []
+        segments = (
+            [
+                {
+                    "text": "real transcript",
+                    "start": 0.25,
+                    "end": 1.75,
+                    "channel": "mixed",
+                    "utteranceId": "utterance-1",
+                    "revision": 2,
+                }
+            ]
+            if with_segments
+            else []
+        )
         self.incoming = iter(
             [
                 json.dumps(
@@ -21,6 +35,7 @@ class _Socket:
                         "committed": "real transcript",
                         "partial": "",
                         "done": True,
+                        "segments": segments,
                     }
                 )
             ]
@@ -97,9 +112,11 @@ def test_streaming_stt_sends_pcm_and_returns_grounded_episode_segment(
     assert connect_kwargs["ping_interval"] is None
     assert result.text == "real transcript"
     assert result.provider == "streaming_ws"
-    assert result.segments[0].start_ms == 0
-    assert result.segments[0].end_ms == 2_000
+    assert result.segments[0].start_ms == 250
+    assert result.segments[0].end_ms == 1_750
     assert result.segments[0].speaker_label == "SPEAKER_UNKNOWN"
+    assert result.segments[0].metadata["channel"] == "mixed"
+    assert result.metadata["segment_timestamps"] is True
 
 
 def test_streaming_stt_batches_long_audio_into_separate_sessions(
@@ -109,7 +126,7 @@ def test_streaming_stt_batches_long_audio_into_separate_sessions(
     sockets: list[_Socket] = []
 
     def fake_connect(*_args: object, **_kwargs: Any) -> _Socket:
-        socket = _Socket()
+        socket = _Socket(with_segments=False)
         sockets.append(socket)
         return socket
 
@@ -138,3 +155,24 @@ def test_streaming_stt_batches_long_audio_into_separate_sessions(
         (4_000, 5_000),
     ]
     assert result.metadata["batch_count"] == 3
+
+
+def test_streaming_stt_allows_tailnet_auth_without_api_key(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    socket = _Socket()
+    monkeypatch.setattr(streaming_stt, "connect", lambda *_args, **_kwargs: socket)
+    audio_path = tmp_path / "audio.wav"
+    _write_pcm16_wav(audio_path)
+    settings = Settings(
+        _env_file=None,
+        transcription_provider="streaming_ws",
+        streaming_stt_url="wss://mac-mini.tail0e3a7.ts.net/stt/v1/audio/transcriptions/stream",
+        streaming_stt_api_key=None,
+        streaming_stt_model="whisper-large-v3-turbo",
+    )
+
+    StreamingWebSocketTranscriber(settings).transcribe(audio_path, language="pt")
+
+    assert "apiKey" not in json.loads(str(socket.sent[0]))
