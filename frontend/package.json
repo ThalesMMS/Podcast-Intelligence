@@ -42,8 +42,8 @@
     "prettier": "^3.0.0",
     "typescript": "^5.9.0",
     "typescript-eslint": "^8.0.0",
-    "vite": "^7.0.0",
-    "vitest": "^5.0.0"
+    "vite": "^7.3.7",
+    "vitest": "^5.1.0"
   },
   "overrides": {
     "brace-expansion": "$brace-expansion",
